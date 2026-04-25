@@ -1,0 +1,58 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: stakeout-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: stakeout
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./api
+    container_name: stakeout-api
+    ports:
+      - "8000:8000"
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB: stakeout
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - ./api:/app
+
+  dashboard:
+    build: ./dashboard
+    container_name: stakeout-dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_URL: http://api:8000
+    depends_on:
+      - api
+
+  graph-runner:
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
+    container_name: stakeout-graph-runner
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB: stakeout
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - ./collector:/app
+      - ./stakeout-agent/stakeout_agent:/stakeout_agent
+    command: python -m dummy_graph.runner
+
+volumes:
+  mongo_data:
