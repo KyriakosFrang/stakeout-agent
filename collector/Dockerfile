@@ -2,8 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY lgmonitor /lgmonitor
-RUN pip install --no-cache-dir /lgmonitor
+COPY stakeout-agent /stakeout-agent
+RUN pip install --no-cache-dir /stakeout-agent
 
 COPY collector/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
