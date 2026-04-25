@@ -120,6 +120,11 @@ stakeout_agent/
 
 Adding support for another framework means adding a single file under `callback_handler/` that inherits from `_MonitorBase` and implements the target framework's callback protocol.
 
+## Possible Dashboard implementation
+Utilizing the stored data, you could build a dashboard to visualize graph runs, node execution timelines, and tool call details. For example, a timeline view of node executions within a run could look like this:
+
+![alt text](image.png)
+
 ## License
 
 MIT

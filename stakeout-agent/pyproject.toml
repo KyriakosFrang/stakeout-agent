@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "stakeout-agent"
 version = "0.1.0"
-description = "Drop-in monitoring for LangGraph applications"
+description = "Drop-in monitoring for GenAI applications"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
