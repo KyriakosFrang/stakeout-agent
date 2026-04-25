@@ -123,7 +123,7 @@ Adding support for another framework means adding a single file under `callback_
 ## Possible Dashboard implementation
 Utilizing the stored data, you could build a dashboard to visualize graph runs, node execution timelines, and tool call details. For example, a timeline view of node executions within a run could look like this:
 
-![alt text](image.png)
+![Alt text](https://github.com/KyriakosFrang/stakeout-agent/blob/main/stakeout-agent/public/image.png)
 
 ## License
 
