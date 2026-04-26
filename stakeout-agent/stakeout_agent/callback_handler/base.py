@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 from uuid import UUID
 
 from stakeout_agent.db import MonitorDB
+
+_logger = logging.getLogger(__name__)
 
 
 class _MonitorBase:
@@ -14,6 +17,7 @@ class _MonitorBase:
         self.graph_id = graph_id
         self.thread_id = thread_id
         self.db = db or MonitorDB()
+        self._log = logging.LoggerAdapter(_logger, {"graph_id": graph_id, "thread_id": thread_id})
 
         self._run_id: str | None = None
         self._node_start_times: dict[str, float] = {}
@@ -30,10 +34,12 @@ class _MonitorBase:
         run_id_str = str(run_id)
         if parent_run_id is None:
             self._run_id = run_id_str
+            self._log.debug("run started run_id=%s", run_id_str)
             self.db.create_run(run_id_str, self.graph_id, self.thread_id)
         else:
             node_name = self._extract_name(serialized, kwargs)
             self._node_start_times[run_id_str] = time.monotonic()
+            self._log.debug("node_start node=%s run_id=%s", node_name, self._run_id)
             self.db.insert_event(
                 run_id=self._run_id,
                 graph_id=self.graph_id,
@@ -51,10 +57,12 @@ class _MonitorBase:
     ) -> None:
         run_id_str = str(run_id)
         if parent_run_id is None:
+            self._log.debug("run completed run_id=%s", self._run_id)
             self.db.complete_run(self._run_id)
         else:
             latency = self._pop_latency(self._node_start_times, run_id_str)
             node_name = kwargs.get("name", "unknown")
+            self._log.debug("node_end node=%s latency_ms=%s run_id=%s", node_name, latency, self._run_id)
             self.db.insert_event(
                 run_id=self._run_id,
                 graph_id=self.graph_id,
@@ -74,10 +82,12 @@ class _MonitorBase:
         run_id_str = str(run_id)
         error_str = f"{type(error).__name__}: {str(error)}"
         if parent_run_id is None:
+            self._log.warning("run failed run_id=%s error=%s", self._run_id, error_str)
             self.db.fail_run(self._run_id, error_str)
         else:
             latency = self._pop_latency(self._node_start_times, run_id_str)
             node_name = kwargs.get("name", "unknown")
+            self._log.warning("node error node=%s run_id=%s error=%s", node_name, self._run_id, error_str)
             self.db.insert_event(
                 run_id=self._run_id,
                 graph_id=self.graph_id,
@@ -97,6 +107,7 @@ class _MonitorBase:
         run_id_str = str(run_id)
         tool_name = serialized.get("name", "unknown_tool") if serialized else kwargs.get("name", "unknown_tool")
         self._tool_start_times[run_id_str] = time.monotonic()
+        self._log.debug("tool_call tool=%s run_id=%s", tool_name, self._run_id)
         self.db.insert_event(
             run_id=self._run_id,
             graph_id=self.graph_id,
@@ -109,6 +120,7 @@ class _MonitorBase:
         run_id_str = str(run_id)
         latency = self._pop_latency(self._tool_start_times, run_id_str)
         tool_name = kwargs.get("name", "unknown_tool")
+        self._log.debug("tool_result tool=%s latency_ms=%s run_id=%s", tool_name, latency, self._run_id)
         self.db.insert_event(
             run_id=self._run_id,
             graph_id=self.graph_id,
@@ -122,6 +134,7 @@ class _MonitorBase:
         run_id_str = str(run_id)
         latency = self._pop_latency(self._tool_start_times, run_id_str)
         tool_name = kwargs.get("name", "unknown_tool")
+        self._log.warning("tool error tool=%s run_id=%s error=%s", tool_name, self._run_id, f"{type(error).__name__}: {error}")
         self.db.insert_event(
             run_id=self._run_id,
             graph_id=self.graph_id,

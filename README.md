@@ -8,6 +8,7 @@ When building LangGraph applications, understanding how your graphs execute is c
 
 - **Zero code changes** — just add a callback to your graph config
 - **Complete visibility** — captures node starts/ends, tool calls, and errors
+- **Resilient by default** — MongoDB failures are logged and never crash your application
 - **MongoDB storage** — leverage your existing infrastructure
 - **Framework-agnostic core** — easily extensible to other frameworks
 
@@ -93,6 +94,15 @@ One document per node start/end, tool call, or error within a run.
 | `tool_result` | A tool returns a result |
 | `error` | A node or tool raises an exception |
 
+## Error handling
+
+All MongoDB write operations catch `PyMongoError` and log the failure rather than propagating the exception. A monitoring failure will never take down your application. Enable `DEBUG` logging on `stakeout_agent` to see these errors:
+
+```python
+import logging
+logging.getLogger("stakeout_agent").setLevel(logging.DEBUG)
+```
+
 ## Using `MonitorDB` directly
 
 ```python
@@ -118,12 +128,13 @@ stakeout_agent/
 └── db.py              # MonitorDB
 ```
 
-Adding support for another framework means adding a single file under `callback_handler/` that inherits from `_MonitorBase` and implements the target framework's callback protocol.
+To add support for another LLM framework, create a file under `callback_handler/` that inherits from `_MonitorBase` and implements the target framework's callback protocol.
 
-## Possible Dashboard implementation
-Utilizing the stored data, you could build a dashboard to visualize graph runs, node execution timelines, and tool call details. For example, a timeline view of node executions within a run could look like this:
+## Dashboard
 
-![Alt text](https://github.com/KyriakosFrang/stakeout-agent/blob/main/stakeout-agent/public/image.png)
+The recorded data can power a dashboard to visualize graph runs, node execution timelines, and tool call details:
+
+![Dashboard timeline view](https://github.com/KyriakosFrang/stakeout-agent/blob/main/stakeout-agent/public/image.png?raw=true)
 
 ## License
 
