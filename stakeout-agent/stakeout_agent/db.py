@@ -1,4 +1,5 @@
 import os
+import threading
 from datetime import datetime, timezone
 
 from pymongo import DESCENDING, MongoClient
@@ -21,11 +22,14 @@ def _make_client():
 class MonitorDB:
     def __init__(self):
         self._db = None
+        self._lock = threading.Lock()
 
     @property
     def _conn(self):
         if self._db is None:
-            self._db = _make_client()
+            with self._lock:
+                if self._db is None:  # double-checked locking
+                    self._db = _make_client()
         return self._db
 
     @property
