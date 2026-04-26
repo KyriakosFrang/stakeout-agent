@@ -870,7 +870,7 @@ wheels = [
 
 [[package]]
 name = "stakeout-agent"
-version = "0.0.2a0"
+version = "0.0.3a0"
 source = { editable = "." }
 dependencies = [
     { name = "langchain-core" },
