@@ -104,19 +104,19 @@ class MonitorDB:
         error: str | None = None,
     ) -> None:
         events = self.events
+        doc: dict = {
+            "run_id": run_id,
+            "graph_id": graph_id,
+            "event_type": event_type,
+            "node_name": node_name,
+            "timestamp": datetime.now(timezone.utc),
+            "payload": payload or {},
+            "error": error,
+        }
+        if latency_ms is not None:
+            doc["latency_ms"] = latency_ms
         try:
-            events.insert_one(
-                {
-                    "run_id": run_id,
-                    "graph_id": graph_id,
-                    "event_type": event_type,
-                    "node_name": node_name,
-                    "timestamp": datetime.now(timezone.utc),
-                    "latency_ms": latency_ms,
-                    "payload": payload or {},
-                    "error": error,
-                }
-            )
+            events.insert_one(doc)
         except PyMongoError as exc:
             _log.error("insert_event for run %s failed: %s", run_id, exc)
             return

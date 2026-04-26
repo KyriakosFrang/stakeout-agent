@@ -41,6 +41,20 @@ monitor = AsyncLangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_1
 result = await graph.ainvoke(inputs, config={"callbacks": [monitor]})
 ```
 
+## Try the example
+
+A self-contained example graph is included to verify everything is wired up correctly.
+
+Start MongoDB, then run:
+
+```bash
+docker compose up -d mongo
+cd stakeout-agent
+uv run python examples/dummy_app.py
+```
+
+It runs a three-node graph (with a tool call), then prints the `runs` and `events` documents written to MongoDB so you can confirm monitoring is working before integrating into your own application.
+
 ## Configuration
 
 | Environment variable | Default | Description |
@@ -73,6 +87,22 @@ One document per graph invocation.
 
 One document per node start/end, tool call, or error within a run.
 
+Start events:
+
+```json
+{
+  "run_id": "<run_id>",
+  "graph_id": "my_graph",
+  "event_type": "node_start",
+  "node_name": "agent",
+  "timestamp": "2026-04-25T10:00:02Z",
+  "payload": {"inputs": "..."},
+  "error": null
+}
+```
+
+End events include a `latency_ms` field measuring execution time:
+
 ```json
 {
   "run_id": "<run_id>",
@@ -81,18 +111,18 @@ One document per node start/end, tool call, or error within a run.
   "node_name": "agent",
   "timestamp": "2026-04-25T10:00:03Z",
   "latency_ms": 1240.5,
-  "payload": {},
+  "payload": {"outputs": "..."},
   "error": null
 }
 ```
 
-| `event_type` | When |
-|---|---|
-| `node_start` | A graph node begins execution |
-| `node_end` | A graph node completes |
-| `tool_call` | A tool is invoked |
-| `tool_result` | A tool returns a result |
-| `error` | A node or tool raises an exception |
+| `event_type` | When | `latency_ms` |
+|---|---|---|
+| `node_start` | A graph node begins execution | absent |
+| `node_end` | A graph node completes | present |
+| `tool_call` | A tool is invoked | absent |
+| `tool_result` | A tool returns a result | present |
+| `error` | A node or tool raises an exception | present |
 
 ## Error handling
 

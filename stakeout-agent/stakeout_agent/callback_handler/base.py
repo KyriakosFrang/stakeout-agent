@@ -21,6 +21,7 @@ class _MonitorBase:
 
         self._run_id: str | None = None
         self._node_start_times: dict[str, float] = {}
+        self._node_names: dict[str, str] = {}
         self._tool_start_times: dict[str, float] = {}
 
     def _handle_chain_start(
@@ -39,6 +40,7 @@ class _MonitorBase:
         else:
             node_name = self._extract_name(serialized, kwargs)
             self._node_start_times[run_id_str] = time.monotonic()
+            self._node_names[run_id_str] = node_name
             self._log.debug("node_start node=%s run_id=%s", node_name, self._run_id)
             self.db.insert_event(
                 run_id=self._run_id,
@@ -61,7 +63,7 @@ class _MonitorBase:
             self.db.complete_run(self._run_id)
         else:
             latency = self._pop_latency(self._node_start_times, run_id_str)
-            node_name = kwargs.get("name", "unknown")
+            node_name = self._node_names.pop(run_id_str, "unknown")
             self._log.debug("node_end node=%s latency_ms=%s run_id=%s", node_name, latency, self._run_id)
             self.db.insert_event(
                 run_id=self._run_id,
@@ -86,7 +88,7 @@ class _MonitorBase:
             self.db.fail_run(self._run_id, error_str)
         else:
             latency = self._pop_latency(self._node_start_times, run_id_str)
-            node_name = kwargs.get("name", "unknown")
+            node_name = self._node_names.pop(run_id_str, "unknown")
             self._log.warning("node error node=%s run_id=%s error=%s", node_name, self._run_id, error_str)
             self.db.insert_event(
                 run_id=self._run_id,
