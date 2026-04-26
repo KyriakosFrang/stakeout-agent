@@ -20,6 +20,7 @@ def _make_client():
     db.runs.create_index("status")
     db.events.create_index("run_id")
     db.events.create_index([("timestamp", DESCENDING)])
+    _log.debug("MonitorDB connected uri=%s db=%s", uri, db_name)
     return db
 
 
@@ -61,6 +62,8 @@ class MonitorDB:
             )
         except PyMongoError as exc:
             _log.error("create_run %s failed: %s", run_id, exc)
+            return
+        _log.debug("create_run inserted run_id=%s graph_id=%s", run_id, graph_id)
 
     def complete_run(self, run_id: str) -> None:
         runs = self.runs
@@ -73,6 +76,8 @@ class MonitorDB:
             return
         if result.matched_count == 0:
             _log.warning("complete_run: no run found with id %s", run_id)
+        else:
+            _log.debug("complete_run run_id=%s", run_id)
 
     def fail_run(self, run_id: str, error: str) -> None:
         runs = self.runs
@@ -85,6 +90,8 @@ class MonitorDB:
             return
         if result.matched_count == 0:
             _log.warning("fail_run: no run found with id %s", run_id)
+        else:
+            _log.debug("fail_run run_id=%s", run_id)
 
     def insert_event(
         self,
@@ -112,3 +119,5 @@ class MonitorDB:
             )
         except PyMongoError as exc:
             _log.error("insert_event for run %s failed: %s", run_id, exc)
+            return
+        _log.debug("insert_event event_type=%s node=%s run_id=%s", event_type, node_name, run_id)
