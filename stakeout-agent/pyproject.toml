@@ -4,14 +4,29 @@ build-backend = "hatchling.build"
 
 [project]
 name = "stakeout-agent"
-version = "0.1.0"
+version = "0.0.1-alpha"
 description = "Drop-in monitoring for GenAI applications"
-readme = "README.md"
+readme = "../README.md"
 requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.3",
     "langgraph>=1.1.9",
     "pymongo>=4.0",
+]
+authors = [
+    { name = "Kyriakos Fragkeskos" }
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["stakeout_agent"]
+
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/stakeout_agent",
+    "/tests",
+    "../README.md",
+    "/pyproject.toml"
 ]
 
 [dependency-groups]
