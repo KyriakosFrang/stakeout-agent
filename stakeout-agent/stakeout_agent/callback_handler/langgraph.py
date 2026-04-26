@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from uuid import UUID
 
@@ -94,7 +95,8 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         tags: list[str] | None = None,  # noqa: ARG002
         **kwargs: Any,
     ) -> None:
-        self._handle_chain_start(serialized, inputs, run_id, parent_run_id, **kwargs)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self._handle_chain_start(serialized, inputs, run_id, parent_run_id, **kwargs))
 
     async def on_chain_end(
         self,
@@ -104,7 +106,8 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        self._handle_chain_end(outputs, run_id, parent_run_id, **kwargs)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self._handle_chain_end(outputs, run_id, parent_run_id, **kwargs))
 
     async def on_chain_error(
         self,
@@ -114,7 +117,8 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        self._handle_chain_error(error, run_id, parent_run_id, **kwargs)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self._handle_chain_error(error, run_id, parent_run_id, **kwargs))
 
     async def on_tool_start(
         self,
@@ -125,10 +129,13 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         parent_run_id: UUID | None = None,  # noqa: ARG002
         **kwargs: Any,
     ) -> None:
-        self._handle_tool_start(serialized, input_str, run_id, **kwargs)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self._handle_tool_start(serialized, input_str, run_id, **kwargs))
 
     async def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
-        self._handle_tool_end(output, run_id, **kwargs)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self._handle_tool_end(output, run_id, **kwargs))
 
     async def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
-        self._handle_tool_error(error, run_id, **kwargs)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self._handle_tool_error(error, run_id, **kwargs))
