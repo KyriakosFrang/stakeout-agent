@@ -67,6 +67,44 @@ class TestSafeTruncate:
         assert _MonitorBase._safe_truncate(Bad()) == {}
 
 
+class TestExtractMessages:
+    def test_returns_none_for_non_dict(self):
+        assert _MonitorBase._extract_messages("text") is None
+
+    def test_returns_none_when_no_messages_key(self):
+        assert _MonitorBase._extract_messages({"value": 42}) is None
+
+    def test_returns_none_for_empty_messages(self):
+        assert _MonitorBase._extract_messages({"messages": []}) is None
+
+    def test_extracts_plain_dicts(self):
+        state = {"messages": [{"role": "human", "content": "hello"}]}
+        result = _MonitorBase._extract_messages(state)
+        assert result == [{"role": "human", "content": "hello"}]
+
+    def test_extracts_langchain_message_objects(self):
+        class FakeHumanMessage:
+            type = "human"
+            content = "hi"
+
+        class FakeAIMessage:
+            type = "ai"
+            content = "hello back"
+
+        state = {"messages": [FakeHumanMessage(), FakeAIMessage()]}
+        result = _MonitorBase._extract_messages(state)
+        assert result == [
+            {"role": "human", "content": "hi"},
+            {"role": "assistant", "content": "hello back"},
+        ]
+
+    def test_truncates_long_content(self):
+        state = {"messages": [{"role": "human", "content": "x" * 600}]}
+        result = _MonitorBase._extract_messages(state)
+        assert result is not None
+        assert len(result[0]["content"]) == 500
+
+
 # ---------------------------------------------------------------------------
 # LangGraphMonitorCallback (sync)
 # ---------------------------------------------------------------------------
@@ -99,6 +137,33 @@ class TestSyncCallback:
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "node_start"
         assert kwargs["node_name"] == "my_node"
+
+    def test_on_chain_start_node_passes_messages_when_present(self):
+        class FakeHumanMessage:
+            type = "human"
+            content = "hello"
+
+        cb, db = self._make()
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start(
+            {"name": "n"},
+            {"messages": [FakeHumanMessage()]},
+            run_id=node_id,
+            parent_run_id=root_id,
+        )
+        kwargs = db.insert_event.call_args.kwargs
+        assert kwargs["messages"] == [{"role": "human", "content": "hello"}]
+
+    def test_on_chain_start_node_passes_no_messages_when_absent(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start({"name": "n"}, {"value": 5}, run_id=node_id, parent_run_id=root_id)
+        kwargs = db.insert_event.call_args.kwargs
+        assert kwargs["messages"] is None
 
     def test_on_chain_end_root_completes_run(self):
         cb, db = self._make()

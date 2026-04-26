@@ -102,6 +102,7 @@ class MonitorDB:
         latency_ms: float | None = None,
         payload: dict | None = None,
         error: str | None = None,
+        messages: list[dict] | None = None,
     ) -> None:
         events = self.events
         doc: dict = {
@@ -115,6 +116,8 @@ class MonitorDB:
         }
         if latency_ms is not None:
             doc["latency_ms"] = latency_ms
+        if messages is not None:
+            doc["messages"] = messages
         try:
             events.insert_one(doc)
         except PyMongoError as exc:
