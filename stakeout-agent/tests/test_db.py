@@ -6,7 +6,7 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pymongo.errors import ConnectionFailure
+from pymongo.errors import ConnectionFailure, OperationFailure
 
 from stakeout_agent.db import MonitorDB
 
@@ -38,6 +38,14 @@ def _patched_monitor(mock_db):
 
 
 class TestCreateRun:
+    def test_write_error_is_logged_not_raised(self, caplog):
+        mock_db, mock_runs, _ = _make_mock_db()
+        mock_runs.insert_one.side_effect = OperationFailure("disk full")
+        with _patched_monitor(mock_db) as monitor:
+            monitor.create_run("run-1", "g", "t")  # must not raise
+
+        assert any("create_run" in r.message and "run-1" in r.message for r in caplog.records)
+
     def test_inserts_correct_document(self):
         mock_db, mock_runs, _ = _make_mock_db()
         with _patched_monitor(mock_db) as monitor:
@@ -72,6 +80,22 @@ class TestCompleteRun:
         assert update["$set"]["status"] == "completed"
         assert isinstance(update["$set"]["ended_at"], datetime)
 
+    def test_write_error_is_logged_not_raised(self, caplog):
+        mock_db, mock_runs, _ = _make_mock_db()
+        mock_runs.update_one.side_effect = OperationFailure("timeout")
+        with _patched_monitor(mock_db) as monitor:
+            monitor.complete_run("run-1")  # must not raise
+
+        assert any("complete_run" in r.message and "run-1" in r.message for r in caplog.records)
+
+    def test_missing_run_id_logs_warning(self, caplog):
+        mock_db, mock_runs, _ = _make_mock_db()
+        mock_runs.update_one.return_value.matched_count = 0
+        with _patched_monitor(mock_db) as monitor:
+            monitor.complete_run("nonexistent")  # must not raise
+
+        assert any("nonexistent" in r.message for r in caplog.records)
+
     def test_missing_run_id_does_not_raise(self):
         mock_db, mock_runs, _ = _make_mock_db()
         mock_runs.update_one.return_value.matched_count = 0
@@ -95,6 +119,22 @@ class TestFailRun:
         assert update["$set"]["status"] == "failed"
         assert update["$set"]["error"] == "boom"
         assert isinstance(update["$set"]["ended_at"], datetime)
+
+    def test_write_error_is_logged_not_raised(self, caplog):
+        mock_db, mock_runs, _ = _make_mock_db()
+        mock_runs.update_one.side_effect = OperationFailure("timeout")
+        with _patched_monitor(mock_db) as monitor:
+            monitor.fail_run("run-1", "boom")  # must not raise
+
+        assert any("fail_run" in r.message and "run-1" in r.message for r in caplog.records)
+
+    def test_missing_run_id_logs_warning(self, caplog):
+        mock_db, mock_runs, _ = _make_mock_db()
+        mock_runs.update_one.return_value.matched_count = 0
+        with _patched_monitor(mock_db) as monitor:
+            monitor.fail_run("nonexistent", "error")  # must not raise
+
+        assert any("nonexistent" in r.message for r in caplog.records)
 
     def test_missing_run_id_does_not_raise(self):
         mock_db, mock_runs, _ = _make_mock_db()
@@ -132,6 +172,14 @@ class TestInsertEvent:
         assert doc["latency_ms"] == 12.5
         assert doc["payload"] == {"x": 1}
         assert doc["error"] is None
+
+    def test_write_error_is_logged_not_raised(self, caplog):
+        mock_db, _, mock_events = _make_mock_db()
+        mock_events.insert_one.side_effect = OperationFailure("disk full")
+        with _patched_monitor(mock_db) as monitor:
+            monitor.insert_event(run_id="run-1", graph_id="g", event_type="e", node_name="n")  # must not raise
+
+        assert any("insert_event" in r.message and "run-1" in r.message for r in caplog.records)
 
     def test_payload_defaults_to_empty_dict(self):
         mock_db, _, mock_events = _make_mock_db()

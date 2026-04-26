@@ -1,9 +1,13 @@
+import logging
 import os
 import threading
 from datetime import datetime, timezone
 
 from pymongo import DESCENDING, MongoClient
 from pymongo.collection import Collection
+from pymongo.errors import PyMongoError
+
+_log = logging.getLogger(__name__)
 
 
 def _make_client():
@@ -41,26 +45,46 @@ class MonitorDB:
         return self._conn.events
 
     def create_run(self, run_id: str, graph_id: str, thread_id: str) -> None:
-        self.runs.insert_one(
-            {
-                "_id": run_id,
-                "graph_id": graph_id,
-                "thread_id": thread_id,
-                "status": "running",
-                "started_at": datetime.now(timezone.utc),
-                "ended_at": None,
-                "error": None,
-                "metadata": {},
-            }
-        )
+        runs = self.runs
+        try:
+            runs.insert_one(
+                {
+                    "_id": run_id,
+                    "graph_id": graph_id,
+                    "thread_id": thread_id,
+                    "status": "running",
+                    "started_at": datetime.now(timezone.utc),
+                    "ended_at": None,
+                    "error": None,
+                    "metadata": {},
+                }
+            )
+        except PyMongoError as exc:
+            _log.error("create_run %s failed: %s", run_id, exc)
 
     def complete_run(self, run_id: str) -> None:
-        self.runs.update_one({"_id": run_id}, {"$set": {"status": "completed", "ended_at": datetime.now(timezone.utc)}})
+        runs = self.runs
+        try:
+            result = runs.update_one(
+                {"_id": run_id}, {"$set": {"status": "completed", "ended_at": datetime.now(timezone.utc)}}
+            )
+        except PyMongoError as exc:
+            _log.error("complete_run %s failed: %s", run_id, exc)
+            return
+        if result.matched_count == 0:
+            _log.warning("complete_run: no run found with id %s", run_id)
 
     def fail_run(self, run_id: str, error: str) -> None:
-        self.runs.update_one(
-            {"_id": run_id}, {"$set": {"status": "failed", "ended_at": datetime.now(timezone.utc), "error": error}}
-        )
+        runs = self.runs
+        try:
+            result = runs.update_one(
+                {"_id": run_id}, {"$set": {"status": "failed", "ended_at": datetime.now(timezone.utc), "error": error}}
+            )
+        except PyMongoError as exc:
+            _log.error("fail_run %s failed: %s", run_id, exc)
+            return
+        if result.matched_count == 0:
+            _log.warning("fail_run: no run found with id %s", run_id)
 
     def insert_event(
         self,
@@ -72,15 +96,19 @@ class MonitorDB:
         payload: dict | None = None,
         error: str | None = None,
     ) -> None:
-        self.events.insert_one(
-            {
-                "run_id": run_id,
-                "graph_id": graph_id,
-                "event_type": event_type,
-                "node_name": node_name,
-                "timestamp": datetime.now(timezone.utc),
-                "latency_ms": latency_ms,
-                "payload": payload or {},
-                "error": error,
-            }
-        )
+        events = self.events
+        try:
+            events.insert_one(
+                {
+                    "run_id": run_id,
+                    "graph_id": graph_id,
+                    "event_type": event_type,
+                    "node_name": node_name,
+                    "timestamp": datetime.now(timezone.utc),
+                    "latency_ms": latency_ms,
+                    "payload": payload or {},
+                    "error": error,
+                }
+            )
+        except PyMongoError as exc:
+            _log.error("insert_event for run %s failed: %s", run_id, exc)
