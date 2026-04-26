@@ -48,6 +48,7 @@ class _MonitorBase:
                 event_type="node_start",
                 node_name=node_name,
                 payload={"inputs": self._safe_truncate(inputs)},
+                messages=self._extract_messages(inputs),
             )
 
     def _handle_chain_end(
@@ -72,6 +73,7 @@ class _MonitorBase:
                 node_name=node_name,
                 latency_ms=latency,
                 payload={"outputs": self._safe_truncate(outputs)},
+                messages=self._extract_messages(outputs),
             )
 
     def _handle_chain_error(
@@ -145,6 +147,30 @@ class _MonitorBase:
             latency_ms=latency,
             error=f"{type(error).__name__}: {str(error)}",
         )
+
+    @staticmethod
+    def _extract_messages(data: Any) -> list[dict] | None:
+        """Extract a messages list from a LangGraph state dict into plain {role, content} dicts.
+
+        Returns None when the state has no messages field, so callers can omit the field entirely.
+        Handles both LangChain BaseMessage objects and already-serialised dicts.
+        """
+        if not isinstance(data, dict):
+            return None
+        msgs = data.get("messages")
+        if not isinstance(msgs, list) or not msgs:
+            return None
+        _ROLE_MAP = {"human": "human", "ai": "assistant", "system": "system", "tool": "tool"}
+        result = []
+        for m in msgs:
+            if hasattr(m, "type") and hasattr(m, "content"):
+                # LangChain BaseMessage subclass
+                role = _ROLE_MAP.get(m.type, m.type)
+                content = m.content if isinstance(m.content, str) else str(m.content)
+                result.append({"role": role, "content": content[:500]})
+            elif isinstance(m, dict) and "role" in m:
+                result.append({"role": m["role"], "content": str(m.get("content", ""))[:500]})
+        return result or None
 
     @staticmethod
     def _extract_name(serialized: dict | None, kwargs: dict) -> str:
