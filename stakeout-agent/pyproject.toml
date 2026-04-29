@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "stakeout-agent"
 version = "0.0.4"
 description = "Drop-in monitoring for GenAI applications"
-readme = "../README.md"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.3",
@@ -28,7 +28,7 @@ packages = ["stakeout_agent"]
 include = [
     "/stakeout_agent",
     "/tests",
-    "../README.md",
+    "/README.md",
     "/pyproject.toml"
 ]
 
