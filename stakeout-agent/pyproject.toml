@@ -17,6 +17,9 @@ authors = [
     { name = "Kyriakos Fragkeskos" }
 ]
 
+[project.optional-dependencies]
+postgres = ["psycopg2-binary>=2.9"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["stakeout_agent"]
 
