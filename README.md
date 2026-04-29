@@ -47,6 +47,8 @@ result = await graph.ainvoke(inputs, config={"callbacks": [monitor]})
 
 ## Try the example
 
+### Run the example graph
+
 A self-contained example graph is included to verify everything is wired up correctly.
 
 Start MongoDB, then run:
@@ -58,6 +60,26 @@ uv run python examples/dummy_app.py
 ```
 
 It runs a three-node graph (with a tool call), then prints the `runs` and `events` documents written to MongoDB so you can confirm monitoring is working before integrating into your own application.
+
+### Launch the dashboard
+
+A Streamlit dashboard is included to visualise runs, node execution timelines, and tool call details.
+
+Optionally seed demo data first, then start the dashboard:
+
+```bash
+docker compose up -d mongo
+cd stakeout-agent
+uv run python examples/seed_demo_data.py   # optional: load demo data
+uv run --with streamlit streamlit run examples/dashboard.py
+```
+
+Open `http://localhost:8501` in your browser. The dashboard auto-refreshes every 10 seconds and shows:
+
+- **Run History** — recent runs, status, duration, and a runs-over-time chart
+- **Node Performance** — average and P95 latency per node and tool, error counts
+- **Run Inspector** — full event timeline for any individual run
+- **Thread Deep Dive** — multi-turn conversation view across all runs in a thread
 
 ## Configuration
 
