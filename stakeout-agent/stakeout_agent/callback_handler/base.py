@@ -66,6 +66,7 @@ class _MonitorBase:
         if parent_run_id is None:
             self._log.debug("run completed run_id=%s", self._run_id)
             self.db.complete_run(self._run_id)
+            self._clear_timing_state()
         else:
             latency = self._pop_latency(self._node_start_times, run_id_str)
             node_name = self._node_names.pop(run_id_str, "unknown")
@@ -92,6 +93,7 @@ class _MonitorBase:
         if parent_run_id is None:
             self._log.warning("run failed run_id=%s error=%s", self._run_id, error_str)
             self.db.fail_run(self._run_id, error_str)
+            self._clear_timing_state()
         else:
             latency = self._pop_latency(self._node_start_times, run_id_str)
             node_name = self._node_names.pop(run_id_str, "unknown")
@@ -151,6 +153,13 @@ class _MonitorBase:
             latency_ms=latency,
             error=f"{type(error).__name__}: {str(error)}",
         )
+
+    def _clear_timing_state(self) -> None:
+        """Clear all timing state dictionaries to prevent memory leaks."""
+        self._node_start_times.clear()
+        self._node_names.clear()
+        self._tool_start_times.clear()
+        self._run_id = None
 
     @staticmethod
     def _extract_messages(data: Any) -> list[dict] | None:
