@@ -7,6 +7,8 @@ from pymongo import DESCENDING, MongoClient
 from pymongo.collection import Collection
 from pymongo.errors import PyMongoError
 
+from stakeout_agent.backends.base import AbstractMonitorDB
+
 _log = logging.getLogger(__name__)
 
 
@@ -24,7 +26,7 @@ def _make_client():
     return db
 
 
-class MonitorDB:
+class MonitorDB(AbstractMonitorDB):
     def __init__(self):
         self._db = None
         self._lock = threading.Lock()

@@ -5,7 +5,7 @@ import time
 from typing import Any
 from uuid import UUID
 
-from stakeout_agent.db import MonitorDB
+from stakeout_agent.backends.base import AbstractMonitorDB
 
 _logger = logging.getLogger(__name__)
 
@@ -13,10 +13,14 @@ _logger = logging.getLogger(__name__)
 class _MonitorBase:
     """Shared state and logic reused by all framework-specific callback handlers."""
 
-    def __init__(self, graph_id: str, thread_id: str, db: MonitorDB | None = None):
+    def __init__(self, graph_id: str, thread_id: str, db: AbstractMonitorDB | None = None):
         self.graph_id = graph_id
         self.thread_id = thread_id
-        self.db = db or MonitorDB()
+        if db is None:
+            from stakeout_agent.backends import get_backend
+
+            db = get_backend()
+        self.db = db
         self._log = logging.LoggerAdapter(_logger, {"graph_id": graph_id, "thread_id": thread_id})
 
         self._run_id: str | None = None
