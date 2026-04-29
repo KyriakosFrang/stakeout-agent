@@ -119,7 +119,7 @@ st.divider()
 # ---------------------------------------------------------------------------
 
 tab_history, tab_nodes, tab_inspector, tab_thread = st.tabs(
-    ["Run History", "Node Performance", "Run Inspector", "Conversation Deep Dive"]
+    ["Run History", "Node Performance", "Run Inspector", "Thread Deep Dive"]
 )
 
 # ---- Tab 1: Run History ------------------------------------------------
@@ -245,25 +245,28 @@ with tab_inspector:
                 hide_index=True,
             )
 
-# ---- Tab 4: Run Deep Dive -------------------------------------------
+# ---- Tab 4: Thread Deep Dive -------------------------------------------
 
 with tab_thread:
-    st.subheader("Conversation Run Deep Dive — Human vs AI")
+    st.subheader("Thread Deep Dive — Full Conversation")
 
-    all_runs = sorted(runs_df["run_id"].unique().tolist())
-    if not all_runs:
-        st.info("No runs found.")
+    if "thread_id" not in runs_df.columns or runs_df["thread_id"].isna().all():
+        st.info("No thread_id data found. Make sure your LangGraph runs pass a thread_id in the config.")
         st.stop()
 
-    selected_run = st.selectbox("Select Run", all_runs, key="run_select")
+    all_threads = sorted(runs_df["thread_id"].dropna().unique().tolist())
+    if not all_threads:
+        st.info("No threads found.")
+        st.stop()
+
+    selected_thread = st.selectbox("Select Thread ID", all_threads, key="thread_select")
 
     thread_runs = (
-        runs_df[runs_df["run_id"] == selected_run]
+        runs_df[runs_df["thread_id"] == selected_thread]
         .sort_values("started_at")
         .to_dict("records")
     )
 
-    # Thread-level stats
     n_runs = len(thread_runs)
     n_completed = sum(1 for r in thread_runs if r["status"] == "completed")
     n_failed = sum(1 for r in thread_runs if r["status"] == "failed")
@@ -277,7 +280,6 @@ with tab_thread:
 
     st.divider()
 
-    # Conversation replay
     thread_run_ids = [r["run_id"] for r in thread_runs]
     thread_events_df = events_df[events_df["run_id"].isin(thread_run_ids)].sort_values("timestamp")
 
@@ -288,8 +290,6 @@ with tab_thread:
             run_id = run["run_id"]
             run_evs = thread_events_df[thread_events_df["run_id"] == run_id]
 
-            # Extract human message: top-level `messages` on the first node_start event.
-            # base.py stores extracted LangChain messages there as plain {role, content} dicts.
             first_start = run_evs[run_evs["event_type"] == "node_start"].iloc[:1]
             human_msg = None
             if not first_start.empty:
@@ -299,7 +299,6 @@ with tab_thread:
                     if isinstance(last, dict) and last.get("role") == "human":
                         human_msg = last.get("content")
 
-            # Extract AI message: top-level `messages` on the last node_end event.
             node_ends = run_evs[run_evs["event_type"] == "node_end"]
             ai_msg = None
             if not node_ends.empty:
@@ -309,19 +308,16 @@ with tab_thread:
                     if isinstance(last, dict) and last.get("role") == "assistant":
                         ai_msg = last.get("content")
 
-            # Tool calls for this run
             tool_calls = run_evs[run_evs["event_type"] == "tool_call"]
             tool_results = run_evs[run_evs["event_type"] == "tool_result"]
             tool_result_map = {
                 row["node_name"]: row for _, row in tool_results.iterrows()
             }
 
-            # Render human turn
             if human_msg:
                 with st.chat_message("human"):
                     st.write(human_msg)
 
-            # Render tool calls inline (between human and AI)
             if not tool_calls.empty:
                 for _, tc in tool_calls.iterrows():
                     with st.chat_message("tool", avatar="🔧"):
@@ -338,7 +334,6 @@ with tab_thread:
                                 tr_output = tr_payload.get("output", "") if isinstance(tr_payload, dict) else ""
                                 st.markdown(f"**Output:** {tr_output}")
 
-            # Render AI response or error
             if run["status"] == "failed":
                 with st.chat_message("assistant"):
                     st.error(f"Run failed: {run.get('error', 'unknown error')}")
@@ -356,7 +351,6 @@ with tab_thread:
                         + (f"{dur:.0f} ms" if pd.notna(dur) else "")
                     )
             elif not human_msg:
-                # No message content available — fall back to event table for this run
                 with st.expander(f"Run `{run_id[:8]}…` (no message content)"):
                     st.dataframe(
                         run_evs[["timestamp", "event_type", "node_name", "latency_ms"]],
