@@ -1,16 +1,16 @@
 # stakeout-agent
 
-Drop-in monitoring for LangGraph applications. Captures every graph run, node execution, and tool call into MongoDB or PostgreSQL with no changes to your graph code.
+Drop-in monitoring for LangGraph and CrewAI applications. Captures every run, task execution, and tool call into MongoDB or PostgreSQL with no changes to your agent code.
 
 ## Why stakeout-agent?
 
-When building LangGraph applications, understanding how your graphs execute is critical for debugging and optimization. stakeout-agent provides:
+When building LangGraph or CrewAI applications, understanding how your agents execute is critical for debugging and optimization. stakeout-agent provides:
 
-- **Zero code changes** — just add a callback to your graph config
-- **Complete visibility** — captures node starts/ends, tool calls, and errors
+- **Zero code changes** — just add a callback to your graph or crew
+- **Complete visibility** — captures node/task starts/ends, tool calls, and errors
 - **Resilient by default** — database failures are logged and never crash your application
 - **MongoDB or PostgreSQL** — use whichever fits your existing infrastructure
-- **Framework-agnostic core** — easily extensible to other frameworks
+- **LangGraph and CrewAI** — first-class support for both frameworks
 
 
 ## Installation
@@ -21,13 +21,16 @@ pip install stakeout-agent
 
 # PostgreSQL backend
 pip install 'stakeout-agent[postgres]'
+
+# CrewAI support
+pip install 'stakeout-agent[crewai]'
 ```
 
 Requires Python 3.10+ and a running MongoDB or PostgreSQL instance.
 
 ## Quick start
 
-### Sync (`graph.invoke`)
+### LangGraph — Sync (`graph.invoke`)
 
 ```python
 from stakeout_agent import LangGraphMonitorCallback
@@ -36,7 +39,7 @@ monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
 result = graph.invoke(inputs, config={"callbacks": [monitor]})
 ```
 
-### Async (`graph.ainvoke` / `graph.astream`)
+### LangGraph — Async (`graph.ainvoke` / `graph.astream`)
 
 ```python
 from stakeout_agent import AsyncLangGraphMonitorCallback
@@ -45,11 +48,31 @@ monitor = AsyncLangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_1
 result = await graph.ainvoke(inputs, config={"callbacks": [monitor]})
 ```
 
-## Try the example
+### CrewAI — Sync (`crew.kickoff`)
 
-### Run the example graph
+```python
+from stakeout_agent import CrewAIMonitorCallback
 
-A self-contained example graph is included to verify everything is wired up correctly.
+monitor = CrewAIMonitorCallback(crew_id="my_crew", thread_id="thread_123")
+crew.kickoff(inputs={...})
+```
+
+`CrewAIMonitorCallback` registers itself with CrewAI's event bus automatically — no extra wiring needed.
+
+### CrewAI — Async (`crew.akickoff`)
+
+```python
+from stakeout_agent import AsyncCrewAIMonitorCallback
+
+monitor = AsyncCrewAIMonitorCallback(crew_id="my_crew", thread_id="thread_123")
+await crew.akickoff(inputs={...})
+```
+
+## Try the examples
+
+### LangGraph example
+
+A self-contained example graph is included to verify everything is wired up correctly. It requires no LLM API key — graph nodes are pure Python functions.
 
 Start MongoDB, then run:
 
@@ -60,6 +83,28 @@ uv run python examples/dummy_app.py
 ```
 
 It runs a three-node graph (with a tool call), then prints the `runs` and `events` documents written to MongoDB so you can confirm monitoring is working before integrating into your own application.
+
+### CrewAI examples
+
+Two CrewAI examples are provided — one sync, one async. Both require a running MongoDB instance and an LLM API key (CrewAI uses OpenAI by default; set `OPENAI_API_KEY`, or configure a different provider via the `llm` parameter on each `Agent`).
+
+**Sync** (`crew.kickoff`):
+
+```bash
+docker compose up -d mongo
+cd stakeout-agent
+OPENAI_API_KEY=sk-... uv run --with crewai python examples/dummy_crewai_app.py
+```
+
+**Async** (`crew.kickoff_async`):
+
+```bash
+docker compose up -d mongo
+cd stakeout-agent
+OPENAI_API_KEY=sk-... uv run --with crewai python examples/dummy_crewai_async_app.py
+```
+
+Each example runs a two-agent crew (Researcher + Writer) with a `MultiplyTool`, then prints the `runs` and `events` documents written to MongoDB.
 
 ### Launch the dashboard
 
@@ -125,7 +170,7 @@ monitor = LangGraphMonitorCallback(
 
 ### `runs` collection
 
-One document per graph invocation.
+One document per graph/crew invocation.
 
 ```json
 {
@@ -144,7 +189,7 @@ One document per graph invocation.
 
 ### `events` collection
 
-One document per node start/end, tool call, or error within a run.
+One document per node/task start/end, tool call, or error within a run.
 
 Start events:
 
@@ -177,11 +222,11 @@ End events include a `latency_ms` field measuring execution time:
 
 | `event_type` | When | `latency_ms` |
 |---|---|---|
-| `node_start` | A graph node begins execution | absent |
-| `node_end` | A graph node completes | present |
+| `node_start` | A graph node or crew task begins | absent |
+| `node_end` | A graph node or crew task completes | present |
 | `tool_call` | A tool is invoked | absent |
 | `tool_result` | A tool returns a result | present |
-| `error` | A node or tool raises an exception | present |
+| `error` | A node, task, or tool raises an exception | present |
 
 ## Error handling
 
@@ -197,9 +242,9 @@ logging.getLogger("stakeout_agent").setLevel(logging.DEBUG)
 ### MongoDB
 
 ```python
-from stakeout_agent import MonitorDB
+from stakeout_agent import MongoMonitorDB
 
-db = MonitorDB()
+db = MongoMonitorDB()
 
 # fetch all runs for a graph
 runs = list(db.runs.find({"graph_id": "my_graph"}).sort("started_at", -1))
@@ -229,13 +274,15 @@ with conn.cursor() as cur:
 stakeout_agent/
 ├── backends/
 │   ├── base.py        # AbstractMonitorDB — shared interface
+│   ├── mongodb.py     # MongoMonitorDB
 │   ├── postgres.py    # PostgresMonitorDB
 │   └── __init__.py    # get_backend() factory
 ├── callback_handler/
 │   ├── base.py        # _MonitorBase — framework-agnostic core logic
 │   ├── langgraph.py   # LangGraphMonitorCallback, AsyncLangGraphMonitorCallback
+│   ├── crewai.py      # CrewAIMonitorCallback, AsyncCrewAIMonitorCallback
 │   └── __init__.py
-└── db.py              # MonitorDB (MongoDB)
+└── db.py              # legacy MongoDB entry point
 ```
 
 To add support for another LLM framework, create a file under `callback_handler/` that inherits from `_MonitorBase` and implements the target framework's callback protocol.
