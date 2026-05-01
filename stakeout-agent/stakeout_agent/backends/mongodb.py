@@ -26,7 +26,7 @@ def _make_client():
     return db
 
 
-class MonitorDB(AbstractMonitorDB):
+class MongoMonitorDB(AbstractMonitorDB):
     def __init__(self):
         self._db = None
         self._lock = threading.Lock()

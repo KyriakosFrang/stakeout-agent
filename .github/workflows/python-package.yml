@@ -37,5 +37,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Check code with Ruff
+        run: uv run ruff check . --fix
+
+      - name: Format code with Ruff linting
+        run: uv run ruff format .      
+
       - name: Run tests
-        run: uv run pytest
+        run: uv run --with pytest --with "crewai>=0.80"  pytest
