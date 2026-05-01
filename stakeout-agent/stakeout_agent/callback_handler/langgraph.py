@@ -96,7 +96,9 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         **kwargs: Any,
     ) -> None:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: self._handle_chain_start(serialized, inputs, run_id, parent_run_id, **kwargs))
+        await loop.run_in_executor(
+            None, lambda: self._handle_chain_start(serialized, inputs, run_id, parent_run_id, **kwargs)
+        )
 
     async def on_chain_end(
         self,

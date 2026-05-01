@@ -142,7 +142,9 @@ class _MonitorBase:
         run_id_str = str(run_id)
         latency = self._pop_latency(self._tool_start_times, run_id_str)
         tool_name = kwargs.get("name", "unknown_tool")
-        self._log.warning("tool error tool=%s run_id=%s error=%s", tool_name, self._run_id, f"{type(error).__name__}: {error}")
+        self._log.warning(
+            "tool error tool=%s run_id=%s error=%s", tool_name, self._run_id, f"{type(error).__name__}: {error}"
+        )
         self.db.insert_event(
             run_id=self._run_id,
             graph_id=self.graph_id,
