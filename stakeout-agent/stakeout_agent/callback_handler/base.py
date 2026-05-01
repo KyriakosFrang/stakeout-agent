@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any
@@ -201,9 +202,14 @@ class _MonitorBase:
         return round((time.monotonic() - start) * 1000, 2)
 
     @staticmethod
-    def _safe_truncate(data: Any, max_len: int = 500) -> Any:
+    def _safe_truncate(data: Any, max_len: int = 500) -> str:
+        if isinstance(data, str):
+            return data[:max_len]
         try:
-            text = str(data)
-            return text[:max_len] if len(text) > max_len else data
+            text = json.dumps(data, default=str)
         except Exception:
-            return {}
+            try:
+                text = str(data)
+            except Exception:
+                return ""
+        return text[:max_len]
