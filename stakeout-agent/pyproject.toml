@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "stakeout-agent"
-version = "0.0.4"
+version = "0.0.4.1"
 description = "Drop-in monitoring for GenAI applications"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,9 +19,7 @@ authors = [
 
 [project.optional-dependencies]
 postgres = ["psycopg2-binary>=2.9"]
-crewai = [
-    "crewai>=0.80",
-]
+crewai = ["crewai>=0.80"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["stakeout_agent"]
