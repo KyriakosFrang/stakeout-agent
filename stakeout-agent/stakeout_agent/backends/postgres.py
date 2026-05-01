@@ -47,8 +47,7 @@ def _make_pg_conn():
         import psycopg2
     except ImportError as exc:
         raise ImportError(
-            "psycopg2 is required for the PostgreSQL backend. "
-            "Install it with: pip install 'stakeout-agent[postgres]'"
+            "psycopg2 is required for the PostgreSQL backend. Install it with: pip install 'stakeout-agent[postgres]'"
         ) from exc
 
     uri = os.getenv("POSTGRES_URI") or os.getenv("DATABASE_URL", "postgresql://localhost/stakeout")
