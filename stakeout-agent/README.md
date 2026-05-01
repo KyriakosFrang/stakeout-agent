@@ -23,9 +23,6 @@
   <a href="https://github.com/KyriakosFrang/stakeout-agent/actions/workflows/python-package.yml">
     <img src="https://github.com/KyriakosFrang/stakeout-agent/actions/workflows/python-package.yml/badge.svg" alt="CI">
   </a>
-  <a href="https://github.com/KyriakosFrang/stakeout-agent/actions/workflows/python-publish.yml">
-    <img src="https://github.com/KyriakosFrang/stakeout-agent/actions/workflows/python-publish.yml/badge.svg" alt="PyPI Publish">
-  </a>
   <a href="https://github.com/astral-sh/uv">
     <img src="https://img.shields.io/badge/package%20manager-uv-8A2BE2" alt="uv">
   </a>
