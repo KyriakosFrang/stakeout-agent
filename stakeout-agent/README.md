@@ -1,5 +1,3 @@
-# stakeout-agent
-
 <h1 align="center">stakeout-agent</h1>
 
 <p align="center">
