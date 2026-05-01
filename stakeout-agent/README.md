@@ -1,17 +1,58 @@
 # stakeout-agent
 
-Drop-in monitoring for LangGraph and CrewAI applications. Captures every run, task execution, and tool call into MongoDB or PostgreSQL with no changes to your agent code.
+[![PyPI](https://img.shields.io/pypi/v/stakeout-agent)](https://pypi.org/project/stakeout-agent/)
+[![Python](https://img.shields.io/pypi/pyversions/stakeout-agent)](https://pypi.org/project/stakeout-agent/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+**Drop-in observability for LangGraph and CrewAI.** One callback. Every run, node, and tool call — captured automatically into MongoDB or PostgreSQL. No changes to your agent code.
+
+![Dashboard timeline view](https://github.com/KyriakosFrang/stakeout-agent/blob/main/stakeout-agent/public/image.png?raw=true)
+
+---
+
+## Install and go
+
+```bash
+pip install stakeout-agent
+```
+
+```python
+from stakeout_agent import LangGraphMonitorCallback
+
+monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
+result = graph.invoke(inputs, config={"callbacks": [monitor]})
+```
+
+That's it. Every node execution, tool call, latency, and error is now in your database.
+
+---
+
+## How it works
+```mermaid
+graph LR
+    A[Your LangGraph / CrewAI app] -->|callback| B[stakeout-agent]
+    B --> C[(MongoDB)]
+    B --> D[(PostgreSQL)]
+    C --> E[Dashboard / your queries]
+    D --> E
+```
+
+stakeout-agent hooks into your framework's event system. It records a `run` document for each invocation and an `event` document for every node start/end, tool call, tool result, and error — with latency tracked at every step.
+
+---
 
 ## Why stakeout-agent?
 
-When building LangGraph or CrewAI applications, understanding how your agents execute is critical for debugging and optimization. stakeout-agent provides:
+| | stakeout-agent |
+|---|---|
+| Lines of integration code | **3** |
+| Crashes your app on DB failure | **Never** — errors are logged, not raised |
+| Node-level latency (P95) | **Yes** — tracked per node and per tool |
+| Frameworks | **LangGraph + CrewAI** |
+| Backends | **MongoDB + PostgreSQL** |
+| Dashboard included | **Yes** — Streamlit, zero config |
 
-- **Zero code changes** — just add a callback to your graph or crew
-- **Complete visibility** — captures node/task starts/ends, tool calls, and errors
-- **Resilient by default** — database failures are logged and never crash your application
-- **MongoDB or PostgreSQL** — use whichever fits your existing infrastructure
-- **LangGraph and CrewAI** — first-class support for both frameworks
-
+---
 
 ## Installation
 
@@ -26,11 +67,13 @@ pip install 'stakeout-agent[postgres]'
 pip install 'stakeout-agent[crewai]'
 ```
 
-Requires Python 3.10+ and a running MongoDB or PostgreSQL instance.
+Requires Python 3.10+.
+
+---
 
 ## Quick start
 
-### LangGraph — Sync (`graph.invoke`)
+### LangGraph — Sync
 
 ```python
 from stakeout_agent import LangGraphMonitorCallback
@@ -39,7 +82,7 @@ monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
 result = graph.invoke(inputs, config={"callbacks": [monitor]})
 ```
 
-### LangGraph — Async (`graph.ainvoke` / `graph.astream`)
+### LangGraph — Async
 
 ```python
 from stakeout_agent import AsyncLangGraphMonitorCallback
@@ -48,7 +91,7 @@ monitor = AsyncLangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_1
 result = await graph.ainvoke(inputs, config={"callbacks": [monitor]})
 ```
 
-### CrewAI — Sync (`crew.kickoff`)
+### CrewAI — Sync
 
 ```python
 from stakeout_agent import CrewAIMonitorCallback
@@ -59,7 +102,7 @@ crew.kickoff(inputs={...})
 
 `CrewAIMonitorCallback` registers itself with CrewAI's event bus automatically — no extra wiring needed.
 
-### CrewAI — Async (`crew.akickoff`)
+### CrewAI — Async
 
 ```python
 from stakeout_agent import AsyncCrewAIMonitorCallback
@@ -68,13 +111,33 @@ monitor = AsyncCrewAIMonitorCallback(crew_id="my_crew", thread_id="thread_123")
 await crew.akickoff(inputs={...})
 ```
 
+---
+
+## Dashboard
+
+Visualise runs, node timelines, and tool call details with the included Streamlit dashboard:
+
+```bash
+docker compose up -d mongo
+cd stakeout-agent
+uv run python examples/seed_demo_data.py   # optional: load demo data
+uv run --with streamlit streamlit run examples/dashboard.py
+```
+
+Open `http://localhost:8501`. The dashboard shows:
+
+- **Run History** — recent runs, status, duration, and a runs-over-time chart
+- **Node Performance** — average and P95 latency per node and tool, error counts
+- **Run Inspector** — full event timeline for any individual run
+- **Thread Deep Dive** — multi-turn conversation view across all runs in a thread
+
+---
+
 ## Try the examples
 
-### LangGraph example
+### LangGraph
 
-A self-contained example graph is included to verify everything is wired up correctly. It requires no LLM API key — graph nodes are pure Python functions.
-
-Start MongoDB, then run:
+A self-contained example that requires no LLM API key — nodes are pure Python functions.
 
 ```bash
 docker compose up -d mongo
@@ -82,13 +145,11 @@ cd stakeout-agent
 uv run python examples/dummy_app.py
 ```
 
-It runs a three-node graph (with a tool call), then prints the `runs` and `events` documents written to MongoDB so you can confirm monitoring is working before integrating into your own application.
+### CrewAI
 
-### CrewAI examples
+Requires a running MongoDB instance and an OpenAI API key (or configure a different provider via the `llm` parameter on each `Agent`).
 
-Two CrewAI examples are provided — one sync, one async. Both require a running MongoDB instance and an LLM API key (CrewAI uses OpenAI by default; set `OPENAI_API_KEY`, or configure a different provider via the `llm` parameter on each `Agent`).
-
-**Sync** (`crew.kickoff`):
+**Sync:**
 
 ```bash
 docker compose up -d mongo
@@ -96,7 +157,7 @@ cd stakeout-agent
 OPENAI_API_KEY=sk-... uv run --with crewai python examples/dummy_crewai_app.py
 ```
 
-**Async** (`crew.kickoff_async`):
+**Async:**
 
 ```bash
 docker compose up -d mongo
@@ -106,25 +167,7 @@ OPENAI_API_KEY=sk-... uv run --with crewai python examples/dummy_crewai_async_ap
 
 Each example runs a two-agent crew (Researcher + Writer) with a `MultiplyTool`, then prints the `runs` and `events` documents written to MongoDB.
 
-### Launch the dashboard
-
-A Streamlit dashboard is included to visualise runs, node execution timelines, and tool call details.
-
-Optionally seed demo data first, then start the dashboard:
-
-```bash
-docker compose up -d mongo
-cd stakeout-agent
-uv run python examples/seed_demo_data.py   # optional: load demo data
-uv run --with streamlit streamlit run examples/dashboard.py
-```
-
-Open `http://localhost:8501` in your browser. The dashboard auto-refreshes every 10 seconds and shows:
-
-- **Run History** — recent runs, status, duration, and a runs-over-time chart
-- **Node Performance** — average and P95 latency per node and tool, error counts
-- **Run Inspector** — full event timeline for any individual run
-- **Thread Deep Dive** — multi-turn conversation view across all runs in a thread
+---
 
 ## Configuration
 
@@ -135,26 +178,21 @@ Open `http://localhost:8501` in your browser. The dashboard auto-refreshes every
 | `MONGO_DB` | `stakeout` | MongoDB database name |
 | `POSTGRES_URI` | `postgresql://localhost/stakeout` | PostgreSQL connection string (also reads `DATABASE_URL`) |
 
-### Using the PostgreSQL backend
-
-Set `STAKEOUT_BACKEND=postgres` and provide a connection string:
+### PostgreSQL
 
 ```bash
 export STAKEOUT_BACKEND=postgres
 export POSTGRES_URI=postgresql://user:password@localhost/stakeout
 ```
 
-stakeout-agent automatically creates the `runs` and `events` tables on first connection, so no migration is needed.
-
-To start a local PostgreSQL instance for development:
+Tables are created automatically on first connection — no migration needed.
 
 ```bash
 docker compose up -d postgres
+# connection string: postgresql://stakeout:stakeout@localhost/stakeout
 ```
 
-The connection string for the Docker service is `postgresql://stakeout:stakeout@localhost/stakeout`.
-
-You can also pass a backend instance directly to skip environment-variable routing:
+You can also inject a backend instance directly:
 
 ```python
 from stakeout_agent import LangGraphMonitorCallback, PostgresMonitorDB
@@ -166,9 +204,11 @@ monitor = LangGraphMonitorCallback(
 )
 ```
 
+---
+
 ## What gets recorded
 
-### `runs` collection
+### `runs`
 
 One document per graph/crew invocation.
 
@@ -187,25 +227,9 @@ One document per graph/crew invocation.
 
 `status` is one of `running`, `completed`, or `failed`.
 
-### `events` collection
+### `events`
 
-One document per node/task start/end, tool call, or error within a run.
-
-Start events:
-
-```json
-{
-  "run_id": "<run_id>",
-  "graph_id": "my_graph",
-  "event_type": "node_start",
-  "node_name": "agent",
-  "timestamp": "2026-04-25T10:00:02Z",
-  "payload": {"inputs": "..."},
-  "error": null
-}
-```
-
-End events include a `latency_ms` field measuring execution time:
+One document per node/task start/end, tool call, or error.
 
 ```json
 {
@@ -228,16 +252,20 @@ End events include a `latency_ms` field measuring execution time:
 | `tool_result` | A tool returns a result | present |
 | `error` | A node, task, or tool raises an exception | present |
 
+---
+
 ## Error handling
 
-All database write operations catch errors and log the failure rather than propagating the exception. A monitoring failure will never take down your application. Enable `DEBUG` logging on `stakeout_agent` to see these errors:
+All database writes catch exceptions and log them — a monitoring failure will never crash your application. Enable `DEBUG` logging to see them:
 
 ```python
 import logging
 logging.getLogger("stakeout_agent").setLevel(logging.DEBUG)
 ```
 
-## Using the database backends directly
+---
+
+## Querying the database directly
 
 ### MongoDB
 
@@ -245,30 +273,28 @@ logging.getLogger("stakeout_agent").setLevel(logging.DEBUG)
 from stakeout_agent import MongoMonitorDB
 
 db = MongoMonitorDB()
-
-# fetch all runs for a graph
 runs = list(db.runs.find({"graph_id": "my_graph"}).sort("started_at", -1))
-
-# fetch events for a specific run
 events = list(db.events.find({"run_id": "<run_id>"}).sort("timestamp", 1))
 ```
 
 ### PostgreSQL
 
 ```python
-from stakeout_agent import PostgresMonitorDB
 import psycopg2
 
-db = PostgresMonitorDB()
-
-# fetch all runs for a graph (use a raw psycopg2 connection for queries)
 conn = psycopg2.connect("postgresql://user:password@localhost/stakeout")
 with conn.cursor() as cur:
     cur.execute("SELECT * FROM runs WHERE graph_id = %s ORDER BY started_at DESC", ("my_graph",))
     runs = cur.fetchall()
 ```
 
-## Package structure
+---
+
+## Extending stakeout-agent
+
+**New framework:** create a file under `callback_handler/` that inherits `_MonitorBase` and implements the target framework's callback protocol.
+
+**New database:** create a class that inherits `AbstractMonitorDB` and implement `create_run`, `complete_run`, `fail_run`, and `insert_event`.
 
 ```
 stakeout_agent/
@@ -284,15 +310,7 @@ stakeout_agent/
 │   └── __init__.py
 ```
 
-To add support for another LLM framework, create a file under `callback_handler/` that inherits from `_MonitorBase` and implements the target framework's callback protocol.
-
-To add support for another database, create a class that inherits from `AbstractMonitorDB` and implement the four methods: `create_run`, `complete_run`, `fail_run`, and `insert_event`.
-
-## Dashboard
-
-The recorded data can power a dashboard to visualize graph runs, node execution timelines, and tool call details:
-
-![Dashboard timeline view](https://github.com/KyriakosFrang/stakeout-agent/blob/main/stakeout-agent/public/image.png?raw=true)
+---
 
 ## License
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "stakeout-agent"
-version = "0.0.6"
+version = "0.0.7"
 description = "Drop-in monitoring for GenAI applications"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,6 +15,13 @@ dependencies = [
 ]
 authors = [
     { name = "Kyriakos Fragkeskos" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 [project.optional-dependencies]
