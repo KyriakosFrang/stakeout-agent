@@ -1,14 +1,39 @@
 # stakeout-agent
 
-[![PyPI](https://img.shields.io/pypi/v/stakeout-agent)](https://pypi.org/project/stakeout-agent/)
-[![Python](https://img.shields.io/pypi/pyversions/stakeout-agent)](https://pypi.org/project/stakeout-agent/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![CI](https://github.com/KyriakosFrang/stakeout-agent/actions/workflows/python-package.yml/badge.svg)](https://github.com/KyriakosFrang/stakeout-agent/actions/workflows/python-package.yml)
-[![Ruff](https://img.shields.io/badge/linting-ruff-261230)](https://github.com/astral-sh/ruff)
-[![uv](https://img.shields.io/badge/package%20manager-uv-8A2BE2)](https://github.com/astral-sh/uv)
-[![Last Commit](https://img.shields.io/github/last-commit/KyriakosFrang/stakeout-agent)](https://github.com/KyriakosFrang/stakeout-agent)
+<h1 align="center">stakeout-agent</h1>
 
-**Drop-in observability for LangGraph and CrewAI.** One callback. Every run, node, and tool call — captured automatically into MongoDB or PostgreSQL. No changes to your agent code.
+<p align="center">
+  <strong>Drop-in observability for LangGraph and CrewAI.</strong>
+</p>
+
+<p align="center">
+   One callback. Every run, node, and tool call — captured automatically into MongoDB or PostgreSQL. No changes to your agent code.
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/stakeout-agent/">
+    <img src="https://img.shields.io/pypi/v/stakeout-agent" alt="PyPI">
+  </a>
+  <a href="https://pypi.org/project/stakeout-agent/">
+    <img src="https://img.shields.io/pypi/pyversions/stakeout-agent" alt="Python versions">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT">
+  </a>
+  <a href="https://github.com/KyriakosFrang/stakeout-agent/actions/workflows/python-package.yml">
+    <img src="https://github.com/KyriakosFrang/stakeout-agent/actions/workflows/python-package.yml/badge.svg" alt="CI">
+  </a>
+  <a href="https://github.com/KyriakosFrang/stakeout-agent/actions/workflows/python-publish.yml">
+    <img src="https://github.com/KyriakosFrang/stakeout-agent/actions/workflows/python-publish.yml/badge.svg" alt="PyPI Publish">
+  </a>
+  <a href="https://github.com/astral-sh/uv">
+    <img src="https://img.shields.io/badge/package%20manager-uv-8A2BE2" alt="uv">
+  </a>
+  <a href="https://github.com/astral-sh/ruff">
+    <img src="https://img.shields.io/badge/linting-ruff-261230" alt="Ruff">
+  </a>
+</p>
+
 
 ![Dashboard timeline view](https://github.com/KyriakosFrang/stakeout-agent/blob/main/stakeout-agent/public/image.png?raw=true)
 
@@ -315,6 +340,19 @@ stakeout_agent/
 ```
 
 ---
+
+## Roadmap
+
+- [x] Sync LangGraph callback support
+- [x] Async LangGraph callback support
+- [x] Sync CrewAI callback support
+- [x] Async CrewAI callback support
+- [x] MongoDB persistence
+- [x] PostgreSQL persistence
+- [x] Run and event collections
+- [x] Streamlit dashboard (Run History, Node Performance, Run Inspector, Thread Deep Dive)
+- [ ] Additional agentic frameworks (PydanticAI, SemanticKernel, AutoGen etc.)
+- [ ] Additional storage backends (SQLite, Redis, ...)
 
 ## License
 
