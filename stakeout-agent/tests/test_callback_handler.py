@@ -47,24 +47,56 @@ class TestPopLatency:
 
 
 class TestSafeTruncate:
-    def test_short_data_returned_unchanged(self):
+    def test_short_string_returned_unchanged(self):
         assert _MonitorBase._safe_truncate("hello") == "hello"
 
     def test_long_string_truncated(self):
         long_str = "x" * 600
         result = _MonitorBase._safe_truncate(long_str)
-        assert result == "x" * 500
+        assert len(result) == 500
 
-    def test_non_string_returned_when_short(self):
+    def test_dict_serialised_to_json_string(self):
         data = {"key": "value"}
-        assert _MonitorBase._safe_truncate(data) == data
+        assert _MonitorBase._safe_truncate(data) == '{"key": "value"}'
 
-    def test_unserializable_returns_empty_dict(self):
+    def test_non_serialisable_object_converted_via_str(self):
+        class Custom:
+            def __str__(self):
+                return "custom-repr"
+
+        result = _MonitorBase._safe_truncate({"obj": Custom()})
+        assert isinstance(result, str)
+        assert "custom-repr" in result
+
+    def test_unserializable_str_returns_empty_string(self):
         class Bad:
             def __str__(self):
                 raise RuntimeError("boom")
 
-        assert _MonitorBase._safe_truncate(Bad()) == {}
+            def __repr__(self):
+                raise RuntimeError("boom")
+
+        assert _MonitorBase._safe_truncate(Bad()) == ""
+
+    def test_always_returns_str(self):
+        for value in ["hello", 42, {"key": "val"}, [1, 2, 3], None]:
+            assert isinstance(_MonitorBase._safe_truncate(value), str)
+
+    def test_langchain_message_like_object_serialisable(self):
+        class HumanMessage:
+            def __init__(self, content):
+                self.content = content
+
+            def __str__(self):
+                return f"HumanMessage(content={self.content!r})"
+
+        inputs = {"messages": [HumanMessage("hi")], "user": "alice"}
+        result = _MonitorBase._safe_truncate(inputs)
+        assert isinstance(result, str)
+        import json
+        # Result must be valid JSON (from the json.dumps path with default=str)
+        parsed = json.loads(result)
+        assert "messages" in parsed
 
 
 class TestExtractMessages:
