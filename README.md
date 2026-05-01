@@ -282,7 +282,6 @@ stakeout_agent/
 │   ├── langgraph.py   # LangGraphMonitorCallback, AsyncLangGraphMonitorCallback
 │   ├── crewai.py      # CrewAIMonitorCallback, AsyncCrewAIMonitorCallback
 │   └── __init__.py
-└── db.py              # legacy MongoDB entry point
 ```
 
 To add support for another LLM framework, create a file under `callback_handler/` that inherits from `_MonitorBase` and implements the target framework's callback protocol.
