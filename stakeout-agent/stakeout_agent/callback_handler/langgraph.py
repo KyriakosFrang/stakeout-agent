@@ -6,7 +6,7 @@ from uuid import UUID
 
 from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackHandler
 
-from stakeout_agent.db import MonitorDB
+from stakeout_agent.backends.base import AbstractMonitorDB
 
 from .base import _MonitorBase
 
@@ -19,7 +19,7 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         graph.invoke(inputs, config={"callbacks": [monitor]})
     """
 
-    def __init__(self, graph_id: str, thread_id: str, db: MonitorDB | None = None):
+    def __init__(self, graph_id: str, thread_id: str, db: AbstractMonitorDB | None = None):
         _MonitorBase.__init__(self, graph_id, thread_id, db)
         BaseCallbackHandler.__init__(self)
 
@@ -81,7 +81,7 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         await graph.ainvoke(inputs, config={"callbacks": [monitor]})
     """
 
-    def __init__(self, graph_id: str, thread_id: str, db: MonitorDB | None = None):
+    def __init__(self, graph_id: str, thread_id: str, db: AbstractMonitorDB | None = None):
         _MonitorBase.__init__(self, graph_id, thread_id, db)
         AsyncCallbackHandler.__init__(self)
 

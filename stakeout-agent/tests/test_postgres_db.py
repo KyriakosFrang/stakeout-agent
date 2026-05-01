@@ -275,10 +275,10 @@ class TestGetBackend:
     def test_returns_mongo_by_default(self, monkeypatch):
         monkeypatch.delenv("STAKEOUT_BACKEND", raising=False)
         from stakeout_agent.backends import get_backend
-        from stakeout_agent.db import MonitorDB
+        from stakeout_agent.backends.mongodb import MongoMonitorDB
 
         result = get_backend()
-        assert isinstance(result, MonitorDB)
+        assert isinstance(result, MongoMonitorDB)
 
     def test_returns_postgres_when_configured(self, monkeypatch):
         monkeypatch.setenv("STAKEOUT_BACKEND", "postgres")

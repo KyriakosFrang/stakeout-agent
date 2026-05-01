@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pymongo.errors import ConnectionFailure, OperationFailure
 
-from stakeout_agent.db import MonitorDB
+from stakeout_agent.backends.mongodb import MongoMonitorDB
 
 
 def _make_mock_db():
@@ -28,8 +28,8 @@ def _make_mock_db():
 
 @contextmanager
 def _patched_monitor(mock_db):
-    with patch("stakeout_agent.db._make_client", return_value=mock_db):
-        yield MonitorDB()
+    with patch("stakeout_agent.backends.mongodb._make_client", return_value=mock_db):
+        yield MongoMonitorDB()
 
 
 # ---------------------------------------------------------------------------
@@ -197,8 +197,8 @@ class TestInsertEvent:
 
 class TestConnectionFailure:
     def test_propagates_on_first_operation(self):
-        with patch("stakeout_agent.db._make_client", side_effect=ConnectionFailure("refused")):
-            monitor = MonitorDB()
+        with patch("stakeout_agent.backends.mongodb._make_client", side_effect=ConnectionFailure("refused")):
+            monitor = MongoMonitorDB()
             with pytest.raises(ConnectionFailure):
                 monitor.create_run("r", "g", "t")
 
@@ -216,8 +216,8 @@ class TestIndexCreation:
         mock_db = MagicMock()
         mock_client.__getitem__ = MagicMock(return_value=mock_db)
 
-        with patch("stakeout_agent.db.MongoClient", return_value=mock_client):
-            monitor = MonitorDB()
+        with patch("stakeout_agent.backends.mongodb.MongoClient", return_value=mock_client):
+            monitor = MongoMonitorDB()
             _ = monitor._conn  # trigger lazy init
 
         create_index_calls = mock_db.runs.create_index.call_args_list + mock_db.events.create_index.call_args_list
@@ -248,13 +248,13 @@ class TestConcurrentConn:
 
         n_threads = 20
         barrier = threading.Barrier(n_threads)
-        monitor = MonitorDB()
+        monitor = MongoMonitorDB()
 
         def access():
             barrier.wait()
             _ = monitor._conn
 
-        with patch("stakeout_agent.db._make_client", side_effect=slow_make_client):
+        with patch("stakeout_agent.backends.mongodb._make_client", side_effect=slow_make_client):
             threads = [threading.Thread(target=access) for _ in range(n_threads)]
             for t in threads:
                 t.start()
