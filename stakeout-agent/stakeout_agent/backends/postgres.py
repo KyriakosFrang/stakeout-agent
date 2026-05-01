@@ -66,11 +66,17 @@ class PostgresMonitorDB(AbstractMonitorDB):
 
     @property
     def _connection(self):
-        if self._conn is None:
+        if self._conn is None or self._conn.closed:
             with self._lock:
-                if self._conn is None:  # double-checked locking
+                if self._conn is None or self._conn.closed:  # double-checked locking
                     self._conn = _make_pg_conn()
         return self._conn
+
+    def _reset_conn_if_closed(self) -> None:
+        if self._conn is not None and self._conn.closed:
+            with self._lock:
+                if self._conn is not None and self._conn.closed:
+                    self._conn = None
 
     def create_run(self, run_id: str, graph_id: str, thread_id: str) -> None:
         conn = self._connection  # propagates on connection failure, same as MonitorDB
@@ -84,6 +90,7 @@ class PostgresMonitorDB(AbstractMonitorDB):
                     (run_id, graph_id, thread_id, datetime.now(timezone.utc)),
                 )
         except Exception as exc:
+            self._reset_conn_if_closed()
             _log.error("create_run %s failed: %s", run_id, exc)
             return
         _log.debug("create_run inserted run_id=%s graph_id=%s", run_id, graph_id)
@@ -101,6 +108,7 @@ class PostgresMonitorDB(AbstractMonitorDB):
                 else:
                     _log.debug("complete_run run_id=%s", run_id)
         except Exception as exc:
+            self._reset_conn_if_closed()
             _log.error("complete_run %s failed: %s", run_id, exc)
 
     def fail_run(self, run_id: str, error: str) -> None:
@@ -116,6 +124,7 @@ class PostgresMonitorDB(AbstractMonitorDB):
                 else:
                     _log.debug("fail_run run_id=%s", run_id)
         except Exception as exc:
+            self._reset_conn_if_closed()
             _log.error("fail_run %s failed: %s", run_id, exc)
 
     def insert_event(
@@ -151,6 +160,7 @@ class PostgresMonitorDB(AbstractMonitorDB):
                     ),
                 )
         except Exception as exc:
+            self._reset_conn_if_closed()
             _log.error("insert_event for run %s failed: %s", run_id, exc)
             return
         _log.debug("insert_event event_type=%s node=%s run_id=%s", event_type, node_name, run_id)

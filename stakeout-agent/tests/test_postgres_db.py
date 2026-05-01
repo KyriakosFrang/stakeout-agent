@@ -22,6 +22,7 @@ def _make_mock_conn(rowcount: int = 1):
 
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
+    mock_conn.closed = 0  # 0 = open; nonzero = closed (psycopg2 convention)
     return mock_conn, mock_cursor
 
 
@@ -264,6 +265,96 @@ class TestConcurrentConn:
                 t.join()
 
         assert call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Reconnection / stale-connection handling
+# ---------------------------------------------------------------------------
+
+
+class TestReconnection:
+    def test_connection_property_reconnects_when_conn_closed(self):
+        stale_conn = MagicMock()
+        stale_conn.closed = 1  # simulate a dead connection
+
+        fresh_conn, _ = _make_mock_conn()
+
+        pg = PostgresMonitorDB()
+        pg._conn = stale_conn
+
+        with patch("stakeout_agent.backends.postgres._make_pg_conn", return_value=fresh_conn):
+            conn = pg._connection
+
+        assert conn is fresh_conn
+        assert pg._conn is fresh_conn
+
+    def test_connection_property_does_not_reconnect_when_conn_open(self):
+        mock_conn, _ = _make_mock_conn()
+        pg = PostgresMonitorDB()
+        pg._conn = mock_conn
+
+        with patch("stakeout_agent.backends.postgres._make_pg_conn") as make_conn:
+            _ = pg._connection
+
+        make_conn.assert_not_called()
+        assert pg._conn is mock_conn
+
+    def test_create_run_resets_conn_after_connection_error(self):
+        mock_conn, mock_cursor = _make_mock_conn()
+
+        def fail_then_close(*_args, **_kwargs):
+            mock_conn.closed = 1
+            raise Exception("connection already closed")
+
+        mock_cursor.execute.side_effect = fail_then_close
+
+        with patch("stakeout_agent.backends.postgres._make_pg_conn", return_value=mock_conn):
+            pg = PostgresMonitorDB()
+            pg.create_run("run-1", "g", "t")
+
+        assert pg._conn is None
+
+    def test_insert_event_resets_conn_after_connection_error(self):
+        mock_conn, mock_cursor = _make_mock_conn()
+
+        def fail_then_close(*_args, **_kwargs):
+            mock_conn.closed = 1
+            raise Exception("connection already closed")
+
+        mock_cursor.execute.side_effect = fail_then_close
+
+        with patch("stakeout_agent.backends.postgres._make_pg_conn", return_value=mock_conn):
+            pg = PostgresMonitorDB()
+            pg.insert_event(run_id="run-1", graph_id="g", event_type="e", node_name="n")
+
+        assert pg._conn is None
+
+    def test_write_error_without_closed_conn_does_not_reset_conn(self):
+        mock_conn, mock_cursor = _make_mock_conn()
+        mock_cursor.execute.side_effect = Exception("constraint violation")
+        # mock_conn.closed remains 0 — connection still alive
+
+        with patch("stakeout_agent.backends.postgres._make_pg_conn", return_value=mock_conn):
+            pg = PostgresMonitorDB()
+            pg.create_run("run-1", "g", "t")
+
+        assert pg._conn is mock_conn
+
+    def test_reconnects_transparently_on_next_call_after_stale(self):
+        stale_conn = MagicMock()
+        stale_conn.closed = 1
+
+        fresh_conn, fresh_cursor = _make_mock_conn()
+
+        pg = PostgresMonitorDB()
+        pg._conn = stale_conn
+
+        with patch("stakeout_agent.backends.postgres._make_pg_conn", return_value=fresh_conn):
+            pg.create_run("run-1", "g", "t")
+
+        fresh_cursor.execute.assert_called_once()
+        sql, _ = fresh_cursor.execute.call_args.args
+        assert "INSERT INTO runs" in sql
 
 
 # ---------------------------------------------------------------------------
