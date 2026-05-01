@@ -3,6 +3,10 @@
 [![PyPI](https://img.shields.io/pypi/v/stakeout-agent)](https://pypi.org/project/stakeout-agent/)
 [![Python](https://img.shields.io/pypi/pyversions/stakeout-agent)](https://pypi.org/project/stakeout-agent/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/KyriakosFrang/stakeout-agent/actions/workflows/python-package.yml/badge.svg)](https://github.com/KyriakosFrang/stakeout-agent/actions/workflows/python-package.yml)
+[![Ruff](https://img.shields.io/badge/linting-ruff-261230)](https://github.com/astral-sh/ruff)
+[![uv](https://img.shields.io/badge/package%20manager-uv-8A2BE2)](https://github.com/astral-sh/uv)
+[![Last Commit](https://img.shields.io/github/last-commit/KyriakosFrang/stakeout-agent)](https://github.com/KyriakosFrang/stakeout-agent)
 
 **Drop-in observability for LangGraph and CrewAI.** One callback. Every run, node, and tool call — captured automatically into MongoDB or PostgreSQL. No changes to your agent code.
 
