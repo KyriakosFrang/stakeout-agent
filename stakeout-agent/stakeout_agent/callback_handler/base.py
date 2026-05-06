@@ -111,14 +111,16 @@ class _MonitorBase:
             self._log.debug("node_start node=%s run_id=%s", node_name, current_run_id)
             payload = {"inputs": self._safe_truncate(inputs)}
             messages = self._extract_messages(inputs)
-            self._safe_db_write(lambda: self.db.insert_event(
-                run_id=current_run_id,
-                graph_id=self.graph_id,
-                event_type="node_start",
-                node_name=node_name,
-                payload=payload,
-                messages=messages,
-            ))
+            self._safe_db_write(
+                lambda: self.db.insert_event(
+                    run_id=current_run_id,
+                    graph_id=self.graph_id,
+                    event_type="node_start",
+                    node_name=node_name,
+                    payload=payload,
+                    messages=messages,
+                )
+            )
 
     def _handle_chain_end(
         self,
@@ -136,12 +138,14 @@ class _MonitorBase:
                 cost = self._total_cost
                 self._clear_timing_state()
             self._log.debug("run completed run_id=%s", current_run_id)
-            self._safe_db_write(lambda: self.db.complete_run(
-                current_run_id,
-                total_input_tokens=total_in,
-                total_output_tokens=total_out,
-                estimated_cost_usd=cost,
-            ))
+            self._safe_db_write(
+                lambda: self.db.complete_run(
+                    current_run_id,
+                    total_input_tokens=total_in,
+                    total_output_tokens=total_out,
+                    estimated_cost_usd=cost,
+                )
+            )
         else:
             with self._state_lock:
                 latency = self._pop_latency(self._node_start_times, run_id_str)
@@ -156,20 +160,22 @@ class _MonitorBase:
             self._log.debug("node_end node=%s latency_ms=%s run_id=%s", node_name, latency, current_run_id)
             payload = {"outputs": self._safe_truncate(outputs)}
             messages = self._extract_messages(outputs)
-            self._safe_db_write(lambda: self.db.insert_event(
-                run_id=current_run_id,
-                graph_id=self.graph_id,
-                event_type="node_end",
-                node_name=node_name,
-                latency_ms=latency,
-                payload=payload,
-                messages=messages,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                model=model,
-                llm_input=llm_input,
-                llm_output=llm_output,
-            ))
+            self._safe_db_write(
+                lambda: self.db.insert_event(
+                    run_id=current_run_id,
+                    graph_id=self.graph_id,
+                    event_type="node_end",
+                    node_name=node_name,
+                    latency_ms=latency,
+                    payload=payload,
+                    messages=messages,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    model=model,
+                    llm_input=llm_input,
+                    llm_output=llm_output,
+                )
+            )
 
     def _handle_chain_error(
         self,
@@ -192,14 +198,16 @@ class _MonitorBase:
                 node_name = self._node_names.pop(run_id_str, "unknown")
                 current_run_id = self._run_id
             self._log.warning("node error node=%s run_id=%s error=%s", node_name, current_run_id, error_str)
-            self._safe_db_write(lambda: self.db.insert_event(
-                run_id=current_run_id,
-                graph_id=self.graph_id,
-                event_type="error",
-                node_name=node_name,
-                latency_ms=latency,
-                error=error_str,
-            ))
+            self._safe_db_write(
+                lambda: self.db.insert_event(
+                    run_id=current_run_id,
+                    graph_id=self.graph_id,
+                    event_type="error",
+                    node_name=node_name,
+                    latency_ms=latency,
+                    error=error_str,
+                )
+            )
 
     def _handle_tool_start(
         self,
@@ -215,13 +223,15 @@ class _MonitorBase:
             current_run_id = self._run_id
         self._log.debug("tool_call tool=%s run_id=%s", tool_name, current_run_id)
         truncated_input = input_str[:500]
-        self._safe_db_write(lambda: self.db.insert_event(
-            run_id=current_run_id,
-            graph_id=self.graph_id,
-            event_type="tool_call",
-            node_name=tool_name,
-            payload={"input": truncated_input},
-        ))
+        self._safe_db_write(
+            lambda: self.db.insert_event(
+                run_id=current_run_id,
+                graph_id=self.graph_id,
+                event_type="tool_call",
+                node_name=tool_name,
+                payload={"input": truncated_input},
+            )
+        )
 
     def _handle_tool_end(self, output: Any, run_id: UUID, **kwargs: Any) -> None:
         run_id_str = str(run_id)
@@ -231,14 +241,16 @@ class _MonitorBase:
             current_run_id = self._run_id
         self._log.debug("tool_result tool=%s latency_ms=%s run_id=%s", tool_name, latency, current_run_id)
         truncated_output = str(output)[:500]
-        self._safe_db_write(lambda: self.db.insert_event(
-            run_id=current_run_id,
-            graph_id=self.graph_id,
-            event_type="tool_result",
-            node_name=tool_name,
-            latency_ms=latency,
-            payload={"output": truncated_output},
-        ))
+        self._safe_db_write(
+            lambda: self.db.insert_event(
+                run_id=current_run_id,
+                graph_id=self.graph_id,
+                event_type="tool_result",
+                node_name=tool_name,
+                latency_ms=latency,
+                payload={"output": truncated_output},
+            )
+        )
 
     def _handle_tool_error(self, error: BaseException, run_id: UUID, **kwargs: Any) -> None:
         run_id_str = str(run_id)
@@ -248,14 +260,16 @@ class _MonitorBase:
             current_run_id = self._run_id
         error_str = f"{type(error).__name__}: {str(error)}"
         self._log.warning("tool error tool=%s run_id=%s error=%s", tool_name, current_run_id, error_str)
-        self._safe_db_write(lambda: self.db.insert_event(
-            run_id=current_run_id,
-            graph_id=self.graph_id,
-            event_type="error",
-            node_name=tool_name,
-            latency_ms=latency,
-            error=error_str,
-        ))
+        self._safe_db_write(
+            lambda: self.db.insert_event(
+                run_id=current_run_id,
+                graph_id=self.graph_id,
+                event_type="error",
+                node_name=tool_name,
+                latency_ms=latency,
+                error=error_str,
+            )
+        )
 
     def _handle_llm_start(self, formatted_messages: list[dict], parent_run_id: UUID | None) -> None:
         """Store LLM prompt messages for the enclosing node, keyed by the node's run_id."""

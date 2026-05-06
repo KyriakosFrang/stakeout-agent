@@ -108,13 +108,15 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             self._node_start_times[task_name] = time.monotonic()
             description = self._safe_truncate(getattr(event.task, "description", ""))
             run_id = self._run_id
-            self._safe_db_write(lambda: self.db.insert_event(
-                run_id=run_id,
-                graph_id=self.graph_id,
-                event_type="node_start",
-                node_name=task_name,
-                payload={"description": description},
-            ))
+            self._safe_db_write(
+                lambda: self.db.insert_event(
+                    run_id=run_id,
+                    graph_id=self.graph_id,
+                    event_type="node_start",
+                    node_name=task_name,
+                    payload={"description": description},
+                )
+            )
 
         @crewai_event_bus.on(LLMCallStartedEvent)
         def on_llm_start(source: Any, event: LLMCallStartedEvent) -> None:
@@ -148,16 +150,18 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
                 llm_output = self._llm_outputs.pop(task_name, None) if self.capture_payloads else None
             run_id = self._run_id
             output = self._safe_truncate(event.output)
-            self._safe_db_write(lambda: self.db.insert_event(
-                run_id=run_id,
-                graph_id=self.graph_id,
-                event_type="node_end",
-                node_name=task_name,
-                latency_ms=latency,
-                payload={"output": output},
-                llm_input=llm_input,
-                llm_output=llm_output,
-            ))
+            self._safe_db_write(
+                lambda: self.db.insert_event(
+                    run_id=run_id,
+                    graph_id=self.graph_id,
+                    event_type="node_end",
+                    node_name=task_name,
+                    latency_ms=latency,
+                    payload={"output": output},
+                    llm_input=llm_input,
+                    llm_output=llm_output,
+                )
+            )
 
         @crewai_event_bus.on(TaskFailedEvent)
         def on_task_error(source: Any, event: TaskFailedEvent) -> None:
@@ -165,14 +169,16 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             latency = self._pop_latency(self._node_start_times, task_name)
             run_id = self._run_id
             error_str = self._safe_truncate(event.error)
-            self._safe_db_write(lambda: self.db.insert_event(
-                run_id=run_id,
-                graph_id=self.graph_id,
-                event_type="error",
-                node_name=task_name,
-                latency_ms=latency,
-                error=error_str,
-            ))
+            self._safe_db_write(
+                lambda: self.db.insert_event(
+                    run_id=run_id,
+                    graph_id=self.graph_id,
+                    event_type="error",
+                    node_name=task_name,
+                    latency_ms=latency,
+                    error=error_str,
+                )
+            )
 
         @crewai_event_bus.on(ToolUsageStartedEvent)
         def on_tool_start(source: Any, event: ToolUsageStartedEvent) -> None:
@@ -180,13 +186,15 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             run_id = self._run_id
             tool_input = self._safe_truncate(event.tool_args)
             tool_name = event.tool_name
-            self._safe_db_write(lambda: self.db.insert_event(
-                run_id=run_id,
-                graph_id=self.graph_id,
-                event_type="tool_call",
-                node_name=tool_name,
-                payload={"input": tool_input},
-            ))
+            self._safe_db_write(
+                lambda: self.db.insert_event(
+                    run_id=run_id,
+                    graph_id=self.graph_id,
+                    event_type="tool_call",
+                    node_name=tool_name,
+                    payload={"input": tool_input},
+                )
+            )
 
         @crewai_event_bus.on(ToolUsageFinishedEvent)
         def on_tool_end(source: Any, event: ToolUsageFinishedEvent) -> None:
@@ -194,14 +202,16 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             run_id = self._run_id
             tool_output = self._safe_truncate(event.output)
             tool_name = event.tool_name
-            self._safe_db_write(lambda: self.db.insert_event(
-                run_id=run_id,
-                graph_id=self.graph_id,
-                event_type="tool_result",
-                node_name=tool_name,
-                latency_ms=latency,
-                payload={"output": tool_output},
-            ))
+            self._safe_db_write(
+                lambda: self.db.insert_event(
+                    run_id=run_id,
+                    graph_id=self.graph_id,
+                    event_type="tool_result",
+                    node_name=tool_name,
+                    latency_ms=latency,
+                    payload={"output": tool_output},
+                )
+            )
 
         @crewai_event_bus.on(ToolUsageErrorEvent)
         def on_tool_error(source: Any, event: ToolUsageErrorEvent) -> None:
@@ -209,14 +219,16 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             run_id = self._run_id
             error_str = self._safe_truncate(event.error)
             tool_name = event.tool_name
-            self._safe_db_write(lambda: self.db.insert_event(
-                run_id=run_id,
-                graph_id=self.graph_id,
-                event_type="error",
-                node_name=tool_name,
-                latency_ms=latency,
-                error=error_str,
-            ))
+            self._safe_db_write(
+                lambda: self.db.insert_event(
+                    run_id=run_id,
+                    graph_id=self.graph_id,
+                    event_type="error",
+                    node_name=tool_name,
+                    latency_ms=latency,
+                    error=error_str,
+                )
+            )
 
 
 class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
@@ -265,9 +277,7 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             error_str = self._safe_truncate(event.error)
             run_id = self._run_id
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None, lambda: self._safe_db_write(lambda: self.db.fail_run(run_id, error_str))
-            )
+            await loop.run_in_executor(None, lambda: self._safe_db_write(lambda: self.db.fail_run(run_id, error_str)))
 
         @crewai_event_bus.on(TaskStartedEvent)
         async def on_task_start(source: Any, event: TaskStartedEvent) -> None:
@@ -278,13 +288,15 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
-                lambda: self._safe_db_write(lambda: self.db.insert_event(
-                    run_id=run_id,
-                    graph_id=self.graph_id,
-                    event_type="node_start",
-                    node_name=task_name,
-                    payload={"description": description},
-                )),
+                lambda: self._safe_db_write(
+                    lambda: self.db.insert_event(
+                        run_id=run_id,
+                        graph_id=self.graph_id,
+                        event_type="node_start",
+                        node_name=task_name,
+                        payload={"description": description},
+                    )
+                ),
             )
 
         @crewai_event_bus.on(LLMCallStartedEvent)
@@ -322,16 +334,18 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
-                lambda: self._safe_db_write(lambda: self.db.insert_event(
-                    run_id=run_id,
-                    graph_id=self.graph_id,
-                    event_type="node_end",
-                    node_name=task_name,
-                    latency_ms=latency,
-                    payload={"output": output},
-                    llm_input=llm_input,
-                    llm_output=llm_output,
-                )),
+                lambda: self._safe_db_write(
+                    lambda: self.db.insert_event(
+                        run_id=run_id,
+                        graph_id=self.graph_id,
+                        event_type="node_end",
+                        node_name=task_name,
+                        latency_ms=latency,
+                        payload={"output": output},
+                        llm_input=llm_input,
+                        llm_output=llm_output,
+                    )
+                ),
             )
 
         @crewai_event_bus.on(TaskFailedEvent)
@@ -343,14 +357,16 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
-                lambda: self._safe_db_write(lambda: self.db.insert_event(
-                    run_id=run_id,
-                    graph_id=self.graph_id,
-                    event_type="error",
-                    node_name=task_name,
-                    latency_ms=latency,
-                    error=error_str,
-                )),
+                lambda: self._safe_db_write(
+                    lambda: self.db.insert_event(
+                        run_id=run_id,
+                        graph_id=self.graph_id,
+                        event_type="error",
+                        node_name=task_name,
+                        latency_ms=latency,
+                        error=error_str,
+                    )
+                ),
             )
 
         @crewai_event_bus.on(ToolUsageStartedEvent)
@@ -362,13 +378,15 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
-                lambda: self._safe_db_write(lambda: self.db.insert_event(
-                    run_id=run_id,
-                    graph_id=self.graph_id,
-                    event_type="tool_call",
-                    node_name=tool_name,
-                    payload={"input": tool_input},
-                )),
+                lambda: self._safe_db_write(
+                    lambda: self.db.insert_event(
+                        run_id=run_id,
+                        graph_id=self.graph_id,
+                        event_type="tool_call",
+                        node_name=tool_name,
+                        payload={"input": tool_input},
+                    )
+                ),
             )
 
         @crewai_event_bus.on(ToolUsageFinishedEvent)
@@ -380,14 +398,16 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
-                lambda: self._safe_db_write(lambda: self.db.insert_event(
-                    run_id=run_id,
-                    graph_id=self.graph_id,
-                    event_type="tool_result",
-                    node_name=tool_name,
-                    latency_ms=latency,
-                    payload={"output": output},
-                )),
+                lambda: self._safe_db_write(
+                    lambda: self.db.insert_event(
+                        run_id=run_id,
+                        graph_id=self.graph_id,
+                        event_type="tool_result",
+                        node_name=tool_name,
+                        latency_ms=latency,
+                        payload={"output": output},
+                    )
+                ),
             )
 
         @crewai_event_bus.on(ToolUsageErrorEvent)
@@ -399,12 +419,14 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
-                lambda: self._safe_db_write(lambda: self.db.insert_event(
-                    run_id=run_id,
-                    graph_id=self.graph_id,
-                    event_type="error",
-                    node_name=tool_name,
-                    latency_ms=latency,
-                    error=error_str,
-                )),
+                lambda: self._safe_db_write(
+                    lambda: self.db.insert_event(
+                        run_id=run_id,
+                        graph_id=self.graph_id,
+                        event_type="error",
+                        node_name=tool_name,
+                        latency_ms=latency,
+                        error=error_str,
+                    )
+                ),
             )
