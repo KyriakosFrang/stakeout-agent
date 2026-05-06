@@ -400,6 +400,31 @@ class TestLLMPayloadCapture:
         assert kwargs["llm_input"] is None
         assert kwargs["llm_output"] is None
 
+    def test_dropped_events_increments_on_db_failure(self):
+        db = mock_db()
+        db.insert_event.side_effect = RuntimeError("db down")
+        cb = LangGraphMonitorCallback(graph_id=GRAPH_ID, thread_id=THREAD_ID, db=db)
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id)
+        assert cb.dropped_events == 1
+
+    def test_dropped_events_starts_at_zero(self):
+        cb, _ = self._make()
+        assert cb.dropped_events == 0
+
+    def test_dropped_events_accumulates_across_calls(self):
+        db = mock_db()
+        db.insert_event.side_effect = RuntimeError("db down")
+        cb = LangGraphMonitorCallback(graph_id=GRAPH_ID, thread_id=THREAD_ID, db=db)
+        root_id = make_uuid()
+        tool_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_tool_start({"name": "t"}, "input", run_id=tool_id)
+        cb.on_tool_end("result", run_id=tool_id, name="t")
+        assert cb.dropped_events == 2
+
     def test_llm_inputs_cleared_after_run_completes(self):
         cb, db = self._make()
         root_id = make_uuid()

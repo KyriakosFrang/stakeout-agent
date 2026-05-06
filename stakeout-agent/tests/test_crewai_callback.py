@@ -489,3 +489,37 @@ class TestCrewAIPayloadCapture:
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["llm_input"] is None
         assert kwargs["llm_output"] is None
+
+
+# ---------------------------------------------------------------------------
+# Dropped events
+# ---------------------------------------------------------------------------
+
+
+class TestDroppedEvents:
+    def test_dropped_events_starts_at_zero(self):
+        cb, db, bus = _make()
+        assert cb.dropped_events == 0
+
+    def test_dropped_events_increments_on_insert_failure(self):
+        cb, db, bus = _make()
+        db.insert_event.side_effect = RuntimeError("db down")
+        bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+        cb._node_start_times["write report"] = time.monotonic()
+        bus.emit(TaskStartedEvent, None, _task_started_event())
+        assert cb.dropped_events == 1
+
+    def test_dropped_events_increments_on_create_run_failure(self):
+        cb, db, bus = _make()
+        db.create_run.side_effect = RuntimeError("db down")
+        bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+        assert cb.dropped_events == 1
+
+    def test_dropped_events_accumulates(self):
+        cb, db, bus = _make()
+        db.insert_event.side_effect = RuntimeError("db down")
+        bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+        cb._node_start_times["write report"] = time.monotonic()
+        bus.emit(TaskStartedEvent, None, _task_started_event())
+        bus.emit(TaskCompletedEvent, None, _task_completed_event())
+        assert cb.dropped_events == 2
