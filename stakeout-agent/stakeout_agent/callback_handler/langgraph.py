@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 from uuid import UUID
 
 from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackHandler
@@ -27,8 +28,19 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         db: AbstractMonitorDB | None = None,
         pricing=None,
         token_extractor: Callable[[dict], tuple[int | None, int | None, str | None]] | None = None,
+        capture_payloads: bool = True,
+        max_payload_chars: int | None = None,
     ):
-        _MonitorBase.__init__(self, graph_id, thread_id, db, pricing=pricing, token_extractor=token_extractor)
+        _MonitorBase.__init__(
+            self,
+            graph_id,
+            thread_id,
+            db,
+            pricing=pricing,
+            token_extractor=token_extractor,
+            capture_payloads=capture_payloads,
+            max_payload_chars=max_payload_chars,
+        )
         BaseCallbackHandler.__init__(self)
 
     def on_chain_start(
@@ -80,6 +92,39 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
     def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
         self._handle_tool_error(error, run_id, **kwargs)
 
+    def on_llm_start(
+        self,
+        serialized: dict[str, Any],  # noqa: ARG002
+        prompts: list[str],
+        *,
+        run_id: UUID,  # noqa: ARG002
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,  # noqa: ARG002
+    ) -> None:
+        formatted = [{"role": "user", "content": p} for p in prompts]
+        self._handle_llm_start(formatted, parent_run_id)
+
+    def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],  # noqa: ARG002
+        messages: list[list[Any]],
+        *,
+        run_id: UUID,  # noqa: ARG002
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,  # noqa: ARG002
+    ) -> None:
+        _ROLE_MAP = {"human": "human", "ai": "assistant", "system": "system", "tool": "tool"}
+        formatted = []
+        for batch in messages:
+            for m in batch:
+                if hasattr(m, "type") and hasattr(m, "content"):
+                    role = _ROLE_MAP.get(m.type, m.type)
+                    content = m.content if isinstance(m.content, str) else str(m.content)
+                    formatted.append({"role": role, "content": content})
+                elif isinstance(m, dict) and "role" in m:
+                    formatted.append({"role": m["role"], "content": str(m.get("content", ""))})
+        self._handle_llm_start(formatted, parent_run_id)
+
     def on_llm_end(
         self,
         response: LLMResult,
@@ -88,7 +133,11 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,  # noqa: ARG002
     ) -> None:
-        self._handle_llm_end(response.llm_output or {}, parent_run_id)
+        try:
+            output_text = response.generations[0][0].text
+        except (IndexError, AttributeError):
+            output_text = None
+        self._handle_llm_end(response.llm_output or {}, parent_run_id, output_text=output_text)
 
 
 class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
@@ -106,8 +155,19 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         db: AbstractMonitorDB | None = None,
         pricing=None,
         token_extractor: Callable[[dict], tuple[int | None, int | None, str | None]] | None = None,
+        capture_payloads: bool = True,
+        max_payload_chars: int | None = None,
     ):
-        _MonitorBase.__init__(self, graph_id, thread_id, db, pricing=pricing, token_extractor=token_extractor)
+        _MonitorBase.__init__(
+            self,
+            graph_id,
+            thread_id,
+            db,
+            pricing=pricing,
+            token_extractor=token_extractor,
+            capture_payloads=capture_payloads,
+            max_payload_chars=max_payload_chars,
+        )
         AsyncCallbackHandler.__init__(self)
 
     async def on_chain_start(
@@ -167,6 +227,41 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: self._handle_tool_error(error, run_id, **kwargs))
 
+    async def on_llm_start(
+        self,
+        serialized: dict[str, Any],  # noqa: ARG002
+        prompts: list[str],
+        *,
+        run_id: UUID,  # noqa: ARG002
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,  # noqa: ARG002
+    ) -> None:
+        formatted = [{"role": "user", "content": p} for p in prompts]
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self._handle_llm_start(formatted, parent_run_id))
+
+    async def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],  # noqa: ARG002
+        messages: list[list[Any]],
+        *,
+        run_id: UUID,  # noqa: ARG002
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,  # noqa: ARG002
+    ) -> None:
+        _ROLE_MAP = {"human": "human", "ai": "assistant", "system": "system", "tool": "tool"}
+        formatted = []
+        for batch in messages:
+            for m in batch:
+                if hasattr(m, "type") and hasattr(m, "content"):
+                    role = _ROLE_MAP.get(m.type, m.type)
+                    content = m.content if isinstance(m.content, str) else str(m.content)
+                    formatted.append({"role": role, "content": content})
+                elif isinstance(m, dict) and "role" in m:
+                    formatted.append({"role": m["role"], "content": str(m.get("content", ""))})
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self._handle_llm_start(formatted, parent_run_id))
+
     async def on_llm_end(
         self,
         response: LLMResult,
@@ -175,5 +270,11 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,  # noqa: ARG002
     ) -> None:
+        try:
+            output_text = response.generations[0][0].text
+        except (IndexError, AttributeError):
+            output_text = None
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: self._handle_llm_end(response.llm_output or {}, parent_run_id))
+        await loop.run_in_executor(
+            None, lambda: self._handle_llm_end(response.llm_output or {}, parent_run_id, output_text=output_text)
+        )

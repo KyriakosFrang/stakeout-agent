@@ -119,6 +119,8 @@ class MongoMonitorDB(AbstractMonitorDB):
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         model: str | None = None,
+        llm_input: list[dict] | None = None,
+        llm_output: str | None = None,
     ) -> None:
         events = self.events
         doc: dict = {
@@ -140,6 +142,10 @@ class MongoMonitorDB(AbstractMonitorDB):
             doc["output_tokens"] = output_tokens
         if model is not None:
             doc["model"] = model
+        if llm_input is not None:
+            doc["llm_input"] = llm_input
+        if llm_output is not None:
+            doc["llm_output"] = llm_output
         try:
             events.insert_one(doc)
         except PyMongoError as exc:

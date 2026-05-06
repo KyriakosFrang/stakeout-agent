@@ -3,11 +3,11 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+import pytest
 from langchain_core.outputs import LLMResult
 
-from stakeout_agent.callback_handler import LangGraphMonitorCallback, AsyncLangGraphMonitorCallback
+from stakeout_agent.callback_handler import AsyncLangGraphMonitorCallback, LangGraphMonitorCallback
 from stakeout_agent.pricing import ModelPricing, PricingMap
-
 
 GRAPH_ID = "test_graph"
 THREAD_ID = "thread_1"
@@ -36,10 +36,12 @@ def _make_anthropic_result(usage: dict, model: str = "claude-3-5-sonnet") -> LLM
 
 class TestPricingMap:
     def _map(self):
-        return PricingMap({
-            "gpt-4o": ModelPricing(input_cost_per_1k=0.005, output_cost_per_1k=0.015),
-            "gpt-4o-mini": ModelPricing(input_cost_per_1k=0.00015, output_cost_per_1k=0.0006),
-        })
+        return PricingMap(
+            {
+                "gpt-4o": ModelPricing(input_cost_per_1k=0.005, output_cost_per_1k=0.015),
+                "gpt-4o-mini": ModelPricing(input_cost_per_1k=0.00015, output_cost_per_1k=0.0006),
+            }
+        )
 
     def test_known_model_returns_cost(self):
         pricing = self._map()
@@ -57,9 +59,6 @@ class TestPricingMap:
     def test_zero_tokens_returns_zero_cost(self):
         pricing = self._map()
         assert pricing.estimate_cost("gpt-4o", 0, 0) == 0.0
-
-
-import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +97,9 @@ class TestDefaultTokenExtractor:
         def my_extractor(meta):
             return meta.get("in"), meta.get("out"), meta.get("m")
 
-        cb = LangGraphMonitorCallback(graph_id=GRAPH_ID, thread_id=THREAD_ID, db=mock_db(), token_extractor=my_extractor)
+        cb = LangGraphMonitorCallback(
+            graph_id=GRAPH_ID, thread_id=THREAD_ID, db=mock_db(), token_extractor=my_extractor
+        )
         in_tok, out_tok, model = cb._token_extractor({"in": 10, "out": 5, "m": "my-model"})
         assert in_tok == 10
         assert out_tok == 5
@@ -140,8 +141,12 @@ class TestTokenAccumulation:
 
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
         cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id)
-        cb.on_llm_end(_make_llm_result({"prompt_tokens": 100, "completion_tokens": 40}), run_id=make_uuid(), parent_run_id=node_id)
-        cb.on_llm_end(_make_llm_result({"prompt_tokens": 200, "completion_tokens": 60}), run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_llm_end(
+            _make_llm_result({"prompt_tokens": 100, "completion_tokens": 40}), run_id=make_uuid(), parent_run_id=node_id
+        )
+        cb.on_llm_end(
+            _make_llm_result({"prompt_tokens": 200, "completion_tokens": 60}), run_id=make_uuid(), parent_run_id=node_id
+        )
         cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
 
         node_end_call = db.insert_event.call_args_list[-1]
@@ -169,7 +174,11 @@ class TestTokenAccumulation:
 
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
         cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id)
-        cb.on_llm_end(_make_llm_result({"prompt_tokens": 300, "completion_tokens": 120}), run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_llm_end(
+            _make_llm_result({"prompt_tokens": 300, "completion_tokens": 120}),
+            run_id=make_uuid(),
+            parent_run_id=node_id,
+        )
         cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
         cb.on_chain_end({}, run_id=root_id, parent_run_id=None)
 
@@ -197,7 +206,9 @@ class TestTokenAccumulation:
 
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
         cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id)
-        cb.on_llm_end(_make_llm_result({"prompt_tokens": 100, "completion_tokens": 50}), run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_llm_end(
+            _make_llm_result({"prompt_tokens": 100, "completion_tokens": 50}), run_id=make_uuid(), parent_run_id=node_id
+        )
         cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
         cb.on_chain_end({}, run_id=root_id, parent_run_id=None)
 
@@ -214,10 +225,12 @@ class TestTokenAccumulation:
 
 class TestCostEstimation:
     def _pricing(self):
-        return PricingMap({
-            "gpt-4o": ModelPricing(input_cost_per_1k=0.005, output_cost_per_1k=0.015),
-            "gpt-4o-mini": ModelPricing(input_cost_per_1k=0.00015, output_cost_per_1k=0.0006),
-        })
+        return PricingMap(
+            {
+                "gpt-4o": ModelPricing(input_cost_per_1k=0.005, output_cost_per_1k=0.015),
+                "gpt-4o-mini": ModelPricing(input_cost_per_1k=0.00015, output_cost_per_1k=0.0006),
+            }
+        )
 
     def _make(self, pricing=None):
         db = mock_db()
@@ -231,7 +244,11 @@ class TestCostEstimation:
 
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
         cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id)
-        cb.on_llm_end(_make_llm_result({"prompt_tokens": 1000, "completion_tokens": 500}), run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_llm_end(
+            _make_llm_result({"prompt_tokens": 1000, "completion_tokens": 500}),
+            run_id=make_uuid(),
+            parent_run_id=node_id,
+        )
         cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
         cb.on_chain_end({}, run_id=root_id, parent_run_id=None)
 
@@ -248,11 +265,19 @@ class TestCostEstimation:
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
 
         cb.on_chain_start({"name": "n1"}, {}, run_id=node1_id, parent_run_id=root_id)
-        cb.on_llm_end(_make_llm_result({"prompt_tokens": 1000, "completion_tokens": 500}, "gpt-4o"), run_id=make_uuid(), parent_run_id=node1_id)
+        cb.on_llm_end(
+            _make_llm_result({"prompt_tokens": 1000, "completion_tokens": 500}, "gpt-4o"),
+            run_id=make_uuid(),
+            parent_run_id=node1_id,
+        )
         cb.on_chain_end({}, run_id=node1_id, parent_run_id=root_id)
 
         cb.on_chain_start({"name": "n2"}, {}, run_id=node2_id, parent_run_id=root_id)
-        cb.on_llm_end(_make_llm_result({"prompt_tokens": 2000, "completion_tokens": 1000}, "gpt-4o-mini"), run_id=make_uuid(), parent_run_id=node2_id)
+        cb.on_llm_end(
+            _make_llm_result({"prompt_tokens": 2000, "completion_tokens": 1000}, "gpt-4o-mini"),
+            run_id=make_uuid(),
+            parent_run_id=node2_id,
+        )
         cb.on_chain_end({}, run_id=node2_id, parent_run_id=root_id)
 
         cb.on_chain_end({}, run_id=root_id, parent_run_id=None)
@@ -271,7 +296,11 @@ class TestCostEstimation:
 
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
         cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id)
-        cb.on_llm_end(_make_llm_result({"prompt_tokens": 500, "completion_tokens": 200}, "unknown-model"), run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_llm_end(
+            _make_llm_result({"prompt_tokens": 500, "completion_tokens": 200}, "unknown-model"),
+            run_id=make_uuid(),
+            parent_run_id=node_id,
+        )
         cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
         cb.on_chain_end({}, run_id=root_id, parent_run_id=None)
 
@@ -286,7 +315,9 @@ class TestCostEstimation:
 
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
         cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id)
-        cb.on_llm_end(_make_llm_result({"prompt_tokens": 100, "completion_tokens": 50}), run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_llm_end(
+            _make_llm_result({"prompt_tokens": 100, "completion_tokens": 50}), run_id=make_uuid(), parent_run_id=node_id
+        )
         cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
         cb.on_chain_end({}, run_id=root_id, parent_run_id=None)
 
@@ -331,7 +362,11 @@ class TestAsyncTokenTracking:
 
         await cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
         await cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id)
-        await cb.on_llm_end(_make_llm_result({"prompt_tokens": 1000, "completion_tokens": 500}), run_id=make_uuid(), parent_run_id=node_id)
+        await cb.on_llm_end(
+            _make_llm_result({"prompt_tokens": 1000, "completion_tokens": 500}),
+            run_id=make_uuid(),
+            parent_run_id=node_id,
+        )
         await cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
         await cb.on_chain_end({}, run_id=root_id, parent_run_id=None)
 

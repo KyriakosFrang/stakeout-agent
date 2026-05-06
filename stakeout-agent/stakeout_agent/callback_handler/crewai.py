@@ -11,6 +11,7 @@ from crewai.events.types.crew_events import (
     CrewKickoffFailedEvent,
     CrewKickoffStartedEvent,
 )
+from crewai.events.types.llm_events import LLMCallCompletedEvent, LLMCallStartedEvent, LLMCallType
 from crewai.events.types.task_events import TaskCompletedEvent, TaskFailedEvent, TaskStartedEvent
 from crewai.events.types.tool_usage_events import (
     ToolUsageErrorEvent,
@@ -21,6 +22,46 @@ from crewai.events.types.tool_usage_events import (
 from stakeout_agent.backends.base import AbstractMonitorDB
 from stakeout_agent.callback_handler.base import _MonitorBase
 
+_ROLE_MAP = {"human": "human", "ai": "assistant", "system": "system", "tool": "tool"}
+
+
+def _format_crewai_messages(messages: str | list[dict] | None, max_chars: int | None) -> list[dict]:
+    """Convert CrewAI LLM messages to a flat list of {role, content} dicts."""
+    if messages is None:
+        return []
+    if isinstance(messages, str):
+        content = messages[:max_chars] if max_chars is not None else messages
+        return [{"role": "user", "content": content}]
+    result = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        role = _ROLE_MAP.get(str(m.get("role", "")), str(m.get("role", "user")))
+        raw_content = m.get("content", "")
+        if not isinstance(raw_content, str):
+            raw_content = str(raw_content)
+        content = raw_content[:max_chars] if max_chars is not None else raw_content
+        result.append({"role": role, "content": content})
+    return result
+
+
+def _extract_crewai_response_text(response: Any) -> str | None:
+    """Best-effort extraction of the response text from a CrewAI LLM response."""
+    if response is None:
+        return None
+    if isinstance(response, str):
+        return response
+    # litellm / openai ModelResponse: choices[0].message.content
+    try:
+        return response.choices[0].message.content
+    except (AttributeError, IndexError, TypeError):
+        pass
+    # Fallback
+    try:
+        return str(response)
+    except Exception:
+        return None
+
 
 class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
     """Sync monitor for use with crew.kickoff().
@@ -30,8 +71,17 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
         crew.kickoff(inputs={...})
     """
 
-    def __init__(self, crew_id: str, thread_id: str, db: AbstractMonitorDB | None = None) -> None:
-        _MonitorBase.__init__(self, crew_id, thread_id, db)
+    def __init__(
+        self,
+        crew_id: str,
+        thread_id: str,
+        db: AbstractMonitorDB | None = None,
+        capture_payloads: bool = True,
+        max_payload_chars: int | None = None,
+    ) -> None:
+        _MonitorBase.__init__(
+            self, crew_id, thread_id, db, capture_payloads=capture_payloads, max_payload_chars=max_payload_chars
+        )
         BaseEventListener.__init__(self)
 
     def setup_listeners(self, crewai_event_bus: Any) -> None:
@@ -61,10 +111,36 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
                 payload={"description": self._safe_truncate(getattr(event.task, "description", ""))},
             )
 
+        @crewai_event_bus.on(LLMCallStartedEvent)
+        def on_llm_start(source: Any, event: LLMCallStartedEvent) -> None:
+            if not self.capture_payloads:
+                return
+            task_name = event.task_name or "unknown_task"
+            formatted = _format_crewai_messages(event.messages, self._max_payload_chars)
+            if formatted:
+                with self._state_lock:
+                    self._llm_inputs.setdefault(task_name, []).extend(formatted)
+
+        @crewai_event_bus.on(LLMCallCompletedEvent)
+        def on_llm_end(source: Any, event: LLMCallCompletedEvent) -> None:
+            # Only capture text response for plain LLM calls, not tool-dispatch calls
+            if not self.capture_payloads or event.call_type == LLMCallType.TOOL_CALL:
+                return
+            task_name = event.task_name or "unknown_task"
+            text = _extract_crewai_response_text(event.response)
+            if text is not None:
+                if self._max_payload_chars is not None:
+                    text = text[: self._max_payload_chars]
+                with self._state_lock:
+                    self._llm_outputs[task_name] = text
+
         @crewai_event_bus.on(TaskCompletedEvent)
         def on_task_end(source: Any, event: TaskCompletedEvent) -> None:
             task_name = event.task_name or "unknown_task"
             latency = self._pop_latency(self._node_start_times, task_name)
+            with self._state_lock:
+                llm_input = self._llm_inputs.pop(task_name, None) if self.capture_payloads else None
+                llm_output = self._llm_outputs.pop(task_name, None) if self.capture_payloads else None
             self.db.insert_event(
                 run_id=self._run_id,
                 graph_id=self.graph_id,
@@ -72,6 +148,8 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
                 node_name=task_name,
                 latency_ms=latency,
                 payload={"output": self._safe_truncate(event.output)},
+                llm_input=llm_input,
+                llm_output=llm_output,
             )
 
         @crewai_event_bus.on(TaskFailedEvent)
@@ -135,8 +213,17 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
         await crew.akickoff(inputs={...})
     """
 
-    def __init__(self, crew_id: str, thread_id: str, db: AbstractMonitorDB | None = None) -> None:
-        _MonitorBase.__init__(self, crew_id, thread_id, db)
+    def __init__(
+        self,
+        crew_id: str,
+        thread_id: str,
+        db: AbstractMonitorDB | None = None,
+        capture_payloads: bool = True,
+        max_payload_chars: int | None = None,
+    ) -> None:
+        _MonitorBase.__init__(
+            self, crew_id, thread_id, db, capture_payloads=capture_payloads, max_payload_chars=max_payload_chars
+        )
         BaseEventListener.__init__(self)
 
     def setup_listeners(self, crewai_event_bus: Any) -> None:
@@ -175,11 +262,37 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
                 ),
             )
 
+        @crewai_event_bus.on(LLMCallStartedEvent)
+        async def on_llm_start(source: Any, event: LLMCallStartedEvent) -> None:
+            if not self.capture_payloads:
+                return
+            task_name = event.task_name or "unknown_task"
+            formatted = _format_crewai_messages(event.messages, self._max_payload_chars)
+            if formatted:
+                with self._state_lock:
+                    self._llm_inputs.setdefault(task_name, []).extend(formatted)
+
+        @crewai_event_bus.on(LLMCallCompletedEvent)
+        async def on_llm_end(source: Any, event: LLMCallCompletedEvent) -> None:
+            # Only capture text response for plain LLM calls, not tool-dispatch calls
+            if not self.capture_payloads or event.call_type == LLMCallType.TOOL_CALL:
+                return
+            task_name = event.task_name or "unknown_task"
+            text = _extract_crewai_response_text(event.response)
+            if text is not None:
+                if self._max_payload_chars is not None:
+                    text = text[: self._max_payload_chars]
+                with self._state_lock:
+                    self._llm_outputs[task_name] = text
+
         @crewai_event_bus.on(TaskCompletedEvent)
         async def on_task_end(source: Any, event: TaskCompletedEvent) -> None:
             task_name = event.task_name or "unknown_task"
             latency = self._pop_latency(self._node_start_times, task_name)
             output = self._safe_truncate(event.output)
+            with self._state_lock:
+                llm_input = self._llm_inputs.pop(task_name, None) if self.capture_payloads else None
+                llm_output = self._llm_outputs.pop(task_name, None) if self.capture_payloads else None
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
@@ -190,6 +303,8 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
                     node_name=task_name,
                     latency_ms=latency,
                     payload={"output": output},
+                    llm_input=llm_input,
+                    llm_output=llm_output,
                 ),
             )
 

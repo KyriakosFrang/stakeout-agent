@@ -52,6 +52,8 @@ ALTER TABLE runs   ADD COLUMN IF NOT EXISTS estimated_cost_usd  DOUBLE PRECISION
 ALTER TABLE events ADD COLUMN IF NOT EXISTS input_tokens        INTEGER;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS output_tokens       INTEGER;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS model               TEXT;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS llm_input           JSONB;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS llm_output          TEXT;
 """
 
 
@@ -164,6 +166,8 @@ class PostgresMonitorDB(AbstractMonitorDB):
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         model: str | None = None,
+        llm_input: list[dict] | None = None,
+        llm_output: str | None = None,
     ) -> None:
         conn = self._connection
         try:
@@ -172,8 +176,8 @@ class PostgresMonitorDB(AbstractMonitorDB):
                     """
                     INSERT INTO events
                         (run_id, graph_id, event_type, node_name, latency_ms, payload, error,
-                         messages, input_tokens, output_tokens, model, timestamp)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         messages, input_tokens, output_tokens, model, llm_input, llm_output, timestamp)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         run_id,
@@ -187,6 +191,8 @@ class PostgresMonitorDB(AbstractMonitorDB):
                         input_tokens,
                         output_tokens,
                         model,
+                        json.dumps(llm_input) if llm_input is not None else None,
+                        llm_output,
                         datetime.now(timezone.utc),
                     ),
                 )

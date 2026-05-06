@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-   One callback. Every run, node, tool call, token count, and cost — captured automatically into MongoDB or PostgreSQL. No changes to your agent code.
+   One callback. Every run, node, tool call, token count, prompt, and response — captured automatically into MongoDB or PostgreSQL. No changes to your agent code.
 </p>
 
 <p align="center">
@@ -47,7 +47,7 @@ monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
 result = graph.invoke(inputs, config={"callbacks": [monitor]})
 ```
 
-That's it. Every node execution, tool call, latency, token count, and error is now in your database.
+That's it. Every node execution, tool call, latency, token count, prompt, response, and error is now in your database.
 
 ---
 
@@ -61,7 +61,7 @@ graph LR
     D --> E
 ```
 
-stakeout-agent hooks into your framework's event system. It records a `run` document for each invocation and an `event` document for every node start/end, tool call, tool result, and error — with latency and token usage tracked at every step.
+stakeout-agent hooks into your framework's event system. It records a `run` document for each invocation and an `event` document for every node start/end, tool call, tool result, and error — with latency, token usage, and the actual prompts and responses captured at every step.
 
 ---
 
@@ -74,6 +74,7 @@ stakeout-agent hooks into your framework's event system. It records a `run` docu
 | Node-level latency (P95) | **Yes** — tracked per node and per tool |
 | Token usage | **Yes** — per node and rolled up to the run |
 | Cost estimation | **Yes** — opt-in, configurable per model |
+| Prompt & response capture | **Yes** — per node, opt-out, truncation supported |
 | Frameworks | **LangGraph + CrewAI** |
 | Backends | **MongoDB + PostgreSQL** |
 | Dashboard included | **Yes** — Streamlit, zero config |
@@ -193,6 +194,61 @@ The extractor receives `response.llm_output` and must return `(input_tokens, out
 
 ---
 
+## Prompt and response capture
+
+The exact messages sent to the LLM and the response text are captured automatically on each `node_end` event. This is on by default and requires no configuration.
+
+```python
+from stakeout_agent import LangGraphMonitorCallback
+
+monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
+result = graph.invoke(inputs, config={"callbacks": [monitor]})
+```
+
+Each `node_end` event will include:
+
+```json
+{
+  "event_type": "node_end",
+  "node_name": "agent",
+  "llm_input": [
+    { "role": "system", "content": "You are a helpful assistant." },
+    { "role": "user",   "content": "Summarize the following document..." }
+  ],
+  "llm_output": "Here is a concise summary..."
+}
+```
+
+`llm_input` and `llm_output` are absent when no LLM call occurred within the node (e.g. pure routing nodes).
+
+### Opt out for sensitive workloads
+
+```python
+monitor = LangGraphMonitorCallback(
+    graph_id="my_graph",
+    thread_id="thread_123",
+    capture_payloads=False,
+)
+```
+
+Recommended for regulated or privacy-sensitive environments (financial services, healthcare) where prompt content may include PII or confidential data.
+
+### Limit stored content size
+
+```python
+monitor = LangGraphMonitorCallback(
+    graph_id="my_graph",
+    thread_id="thread_123",
+    max_payload_chars=2000,
+)
+```
+
+Each message's content and the response text are truncated to `max_payload_chars` characters before storage. Useful for long-context or multi-turn workflows to prevent unbounded document sizes.
+
+Both options apply identically to `AsyncLangGraphMonitorCallback`, `CrewAIMonitorCallback`, and `AsyncCrewAIMonitorCallback`.
+
+---
+
 ## Dashboard
 
 Visualise runs, node timelines, and tool call details with the included Streamlit dashboard:
@@ -265,7 +321,7 @@ export STAKEOUT_BACKEND=postgres
 export POSTGRES_URI=postgresql://user:password@localhost/stakeout
 ```
 
-Tables are created automatically on first connection — no migration needed. New token and cost columns are added to existing tables via `ALTER TABLE … ADD COLUMN IF NOT EXISTS`.
+Tables are created automatically on first connection — no migration needed. New columns (`llm_input`, `llm_output`, token and cost fields) are added to existing tables via `ALTER TABLE … ADD COLUMN IF NOT EXISTS`.
 
 ```bash
 docker compose up -d postgres
@@ -324,18 +380,23 @@ One document per node/task start/end, tool call, or error.
   "input_tokens": 320,
   "output_tokens": 85,
   "model": "gpt-4o",
+  "llm_input": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Summarize the following document..."}
+  ],
+  "llm_output": "Here is a concise summary...",
   "payload": {"outputs": "..."},
   "error": null
 }
 ```
 
-| `event_type` | When | `latency_ms` | token fields |
-|---|---|---|---|
-| `node_start` | A graph node or crew task begins | absent | absent |
-| `node_end` | A graph node or crew task completes | present | present when LLM was called |
-| `tool_call` | A tool is invoked | absent | absent |
-| `tool_result` | A tool returns a result | present | absent |
-| `error` | A node, task, or tool raises an exception | present | absent |
+| `event_type` | When | `latency_ms` | token fields | `llm_input` / `llm_output` |
+|---|---|---|---|---|
+| `node_start` | A graph node or crew task begins | absent | absent | absent |
+| `node_end` | A graph node or crew task completes | present | present when LLM was called | present when LLM was called and `capture_payloads=True` |
+| `tool_call` | A tool is invoked | absent | absent | absent |
+| `tool_result` | A tool returns a result | present | absent | absent |
+| `error` | A node, task, or tool raises an exception | present | absent | absent |
 
 ---
 
@@ -409,6 +470,7 @@ stakeout_agent/
 - [x] Run and event collections
 - [x] Token usage tracking (per node and per run)
 - [x] Cost estimation with configurable pricing map
+- [x] Prompt and response capture per node (`capture_payloads`, `max_payload_chars`)
 - [x] Streamlit dashboard (Run History, Node Performance, Run Inspector, Thread Deep Dive)
 - [ ] Additional agentic frameworks (PydanticAI, SemanticKernel, AutoGen etc.)
 - [ ] Additional storage backends (SQLite, Redis, ...)

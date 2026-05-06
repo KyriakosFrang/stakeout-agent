@@ -33,4 +33,6 @@ class AbstractMonitorDB(ABC):
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         model: str | None = None,
+        llm_input: list[dict] | None = None,
+        llm_output: str | None = None,
     ) -> None: ...
