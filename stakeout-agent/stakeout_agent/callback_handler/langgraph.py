@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID
 
 from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackHandler
+from langchain_core.outputs import LLMResult
 
 from stakeout_agent.backends.base import AbstractMonitorDB
 
@@ -19,8 +20,15 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         graph.invoke(inputs, config={"callbacks": [monitor]})
     """
 
-    def __init__(self, graph_id: str, thread_id: str, db: AbstractMonitorDB | None = None):
-        _MonitorBase.__init__(self, graph_id, thread_id, db)
+    def __init__(
+        self,
+        graph_id: str,
+        thread_id: str,
+        db: AbstractMonitorDB | None = None,
+        pricing=None,
+        token_extractor: Callable[[dict], tuple[int | None, int | None, str | None]] | None = None,
+    ):
+        _MonitorBase.__init__(self, graph_id, thread_id, db, pricing=pricing, token_extractor=token_extractor)
         BaseCallbackHandler.__init__(self)
 
     def on_chain_start(
@@ -72,6 +80,16 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
     def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
         self._handle_tool_error(error, run_id, **kwargs)
 
+    def on_llm_end(
+        self,
+        response: LLMResult,
+        *,
+        run_id: UUID,  # noqa: ARG002
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,  # noqa: ARG002
+    ) -> None:
+        self._handle_llm_end(response.llm_output or {}, parent_run_id)
+
 
 class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
     """Async monitor for use with graph.ainvoke() / graph.astream().
@@ -81,8 +99,15 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         await graph.ainvoke(inputs, config={"callbacks": [monitor]})
     """
 
-    def __init__(self, graph_id: str, thread_id: str, db: AbstractMonitorDB | None = None):
-        _MonitorBase.__init__(self, graph_id, thread_id, db)
+    def __init__(
+        self,
+        graph_id: str,
+        thread_id: str,
+        db: AbstractMonitorDB | None = None,
+        pricing=None,
+        token_extractor: Callable[[dict], tuple[int | None, int | None, str | None]] | None = None,
+    ):
+        _MonitorBase.__init__(self, graph_id, thread_id, db, pricing=pricing, token_extractor=token_extractor)
         AsyncCallbackHandler.__init__(self)
 
     async def on_chain_start(
@@ -141,3 +166,14 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
     async def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: self._handle_tool_error(error, run_id, **kwargs))
+
+    async def on_llm_end(
+        self,
+        response: LLMResult,
+        *,
+        run_id: UUID,  # noqa: ARG002
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,  # noqa: ARG002
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self._handle_llm_end(response.llm_output or {}, parent_run_id))

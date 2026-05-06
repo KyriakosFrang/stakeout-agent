@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-   One callback. Every run, node, and tool call — captured automatically into MongoDB or PostgreSQL. No changes to your agent code.
+   One callback. Every run, node, tool call, token count, and cost — captured automatically into MongoDB or PostgreSQL. No changes to your agent code.
 </p>
 
 <p align="center">
@@ -47,7 +47,7 @@ monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
 result = graph.invoke(inputs, config={"callbacks": [monitor]})
 ```
 
-That's it. Every node execution, tool call, latency, and error is now in your database.
+That's it. Every node execution, tool call, latency, token count, and error is now in your database.
 
 ---
 
@@ -61,7 +61,7 @@ graph LR
     D --> E
 ```
 
-stakeout-agent hooks into your framework's event system. It records a `run` document for each invocation and an `event` document for every node start/end, tool call, tool result, and error — with latency tracked at every step.
+stakeout-agent hooks into your framework's event system. It records a `run` document for each invocation and an `event` document for every node start/end, tool call, tool result, and error — with latency and token usage tracked at every step.
 
 ---
 
@@ -72,6 +72,8 @@ stakeout-agent hooks into your framework's event system. It records a `run` docu
 | Lines of integration code | **3** |
 | Crashes your app on DB failure | **Never** — errors are logged, not raised |
 | Node-level latency (P95) | **Yes** — tracked per node and per tool |
+| Token usage | **Yes** — per node and rolled up to the run |
+| Cost estimation | **Yes** — opt-in, configurable per model |
 | Frameworks | **LangGraph + CrewAI** |
 | Backends | **MongoDB + PostgreSQL** |
 | Dashboard included | **Yes** — Streamlit, zero config |
@@ -134,6 +136,60 @@ from stakeout_agent import AsyncCrewAIMonitorCallback
 monitor = AsyncCrewAIMonitorCallback(crew_id="my_crew", thread_id="thread_123")
 await crew.akickoff(inputs={...})
 ```
+
+---
+
+## Token usage and cost tracking
+
+Token counts are captured automatically from every LLM call — no changes to your agent code required. Per-node input/output tokens are recorded on each `node_end` event, and totals are rolled up onto the `run` document at completion.
+
+### Token capture only (always on)
+
+```python
+from stakeout_agent import LangGraphMonitorCallback
+
+monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
+result = graph.invoke(inputs, config={"callbacks": [monitor]})
+```
+
+Token fields (`input_tokens`, `output_tokens`, `model`) appear on `node_end` events and `total_input_tokens` / `total_output_tokens` on the run document whenever the LLM response contains usage metadata.
+
+### Cost estimation (opt-in)
+
+```python
+from stakeout_agent import LangGraphMonitorCallback
+from stakeout_agent.pricing import ModelPricing, PricingMap
+
+monitor = LangGraphMonitorCallback(
+    graph_id="my_graph",
+    thread_id="thread_123",
+    pricing=PricingMap({
+        "gpt-4o":      ModelPricing(input_cost_per_1k=0.005,   output_cost_per_1k=0.015),
+        "gpt-4o-mini": ModelPricing(input_cost_per_1k=0.00015, output_cost_per_1k=0.0006),
+    })
+)
+result = graph.invoke(inputs, config={"callbacks": [monitor]})
+```
+
+When `pricing` is provided, `estimated_cost_usd` is computed per LLM call and rolled up onto the run. Multi-model workflows are fully supported — each node resolves cost against the model it actually used. Models not present in the map are silently skipped; token counts are still recorded.
+
+### Custom token extractor
+
+The default extractor covers OpenAI (`token_usage` / `model_name`) and Anthropic (`usage` / `model`) response shapes. For providers with a different metadata structure, pass a `token_extractor`:
+
+```python
+def my_extractor(metadata: dict) -> tuple[int | None, int | None, str | None]:
+    usage = metadata.get("llm_output", {}).get("token_usage", {})
+    return usage.get("input"), usage.get("output"), metadata.get("model_id")
+
+monitor = LangGraphMonitorCallback(
+    graph_id="my_graph",
+    thread_id="thread_123",
+    token_extractor=my_extractor,
+)
+```
+
+The extractor receives `response.llm_output` and must return `(input_tokens, output_tokens, model_name)`. Any field can be `None`.
 
 ---
 
@@ -209,7 +265,7 @@ export STAKEOUT_BACKEND=postgres
 export POSTGRES_URI=postgresql://user:password@localhost/stakeout
 ```
 
-Tables are created automatically on first connection — no migration needed.
+Tables are created automatically on first connection — no migration needed. New token and cost columns are added to existing tables via `ALTER TABLE … ADD COLUMN IF NOT EXISTS`.
 
 ```bash
 docker compose up -d postgres
@@ -245,11 +301,13 @@ One document per graph/crew invocation.
   "started_at": "2026-04-25T10:00:00Z",
   "ended_at": "2026-04-25T10:00:05Z",
   "error": null,
-  "metadata": {}
+  "total_input_tokens": 1850,
+  "total_output_tokens": 420,
+  "estimated_cost_usd": 0.01553
 }
 ```
 
-`status` is one of `running`, `completed`, or `failed`.
+`status` is one of `running`, `completed`, or `failed`. Token and cost fields are omitted when no LLM usage data is available; `estimated_cost_usd` is omitted when no `pricing` map is configured.
 
 ### `events`
 
@@ -263,18 +321,21 @@ One document per node/task start/end, tool call, or error.
   "node_name": "agent",
   "timestamp": "2026-04-25T10:00:03Z",
   "latency_ms": 1240.5,
+  "input_tokens": 320,
+  "output_tokens": 85,
+  "model": "gpt-4o",
   "payload": {"outputs": "..."},
   "error": null
 }
 ```
 
-| `event_type` | When | `latency_ms` |
-|---|---|---|
-| `node_start` | A graph node or crew task begins | absent |
-| `node_end` | A graph node or crew task completes | present |
-| `tool_call` | A tool is invoked | absent |
-| `tool_result` | A tool returns a result | present |
-| `error` | A node, task, or tool raises an exception | present |
+| `event_type` | When | `latency_ms` | token fields |
+|---|---|---|---|
+| `node_start` | A graph node or crew task begins | absent | absent |
+| `node_end` | A graph node or crew task completes | present | present when LLM was called |
+| `tool_call` | A tool is invoked | absent | absent |
+| `tool_result` | A tool returns a result | present | absent |
+| `error` | A node, task, or tool raises an exception | present | absent |
 
 ---
 
@@ -332,6 +393,7 @@ stakeout_agent/
 │   ├── langgraph.py   # LangGraphMonitorCallback, AsyncLangGraphMonitorCallback
 │   ├── crewai.py      # CrewAIMonitorCallback, AsyncCrewAIMonitorCallback
 │   └── __init__.py
+├── pricing.py         # ModelPricing, PricingMap
 ```
 
 ---
@@ -345,6 +407,8 @@ stakeout_agent/
 - [x] MongoDB persistence
 - [x] PostgreSQL persistence
 - [x] Run and event collections
+- [x] Token usage tracking (per node and per run)
+- [x] Cost estimation with configurable pricing map
 - [x] Streamlit dashboard (Run History, Node Performance, Run Inspector, Thread Deep Dive)
 - [ ] Additional agentic frameworks (PydanticAI, SemanticKernel, AutoGen etc.)
 - [ ] Additional storage backends (SQLite, Redis, ...)

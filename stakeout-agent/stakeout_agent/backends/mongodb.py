@@ -67,12 +67,23 @@ class MongoMonitorDB(AbstractMonitorDB):
             return
         _log.debug("create_run inserted run_id=%s graph_id=%s", run_id, graph_id)
 
-    def complete_run(self, run_id: str) -> None:
+    def complete_run(
+        self,
+        run_id: str,
+        total_input_tokens: int | None = None,
+        total_output_tokens: int | None = None,
+        estimated_cost_usd: float | None = None,
+    ) -> None:
         runs = self.runs
+        update: dict = {"status": "completed", "ended_at": datetime.now(timezone.utc)}
+        if total_input_tokens is not None:
+            update["total_input_tokens"] = total_input_tokens
+        if total_output_tokens is not None:
+            update["total_output_tokens"] = total_output_tokens
+        if estimated_cost_usd is not None:
+            update["estimated_cost_usd"] = estimated_cost_usd
         try:
-            result = runs.update_one(
-                {"_id": run_id}, {"$set": {"status": "completed", "ended_at": datetime.now(timezone.utc)}}
-            )
+            result = runs.update_one({"_id": run_id}, {"$set": update})
         except PyMongoError as exc:
             _log.error("complete_run %s failed: %s", run_id, exc)
             return
@@ -105,6 +116,9 @@ class MongoMonitorDB(AbstractMonitorDB):
         payload: dict | None = None,
         error: str | None = None,
         messages: list[dict] | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        model: str | None = None,
     ) -> None:
         events = self.events
         doc: dict = {
@@ -120,6 +134,12 @@ class MongoMonitorDB(AbstractMonitorDB):
             doc["latency_ms"] = latency_ms
         if messages is not None:
             doc["messages"] = messages
+        if input_tokens is not None:
+            doc["input_tokens"] = input_tokens
+        if output_tokens is not None:
+            doc["output_tokens"] = output_tokens
+        if model is not None:
+            doc["model"] = model
         try:
             events.insert_one(doc)
         except PyMongoError as exc:

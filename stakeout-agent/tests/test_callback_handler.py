@@ -202,7 +202,8 @@ class TestSyncCallback:
         run_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=run_id, parent_run_id=None)
         cb.on_chain_end({}, run_id=run_id, parent_run_id=None)
-        db.complete_run.assert_called_once_with(str(run_id))
+        db.complete_run.assert_called_once()
+        assert db.complete_run.call_args.args[0] == str(run_id)
 
     def test_on_chain_end_node_inserts_event_with_latency(self):
         cb, db = self._make()
@@ -288,7 +289,8 @@ class TestAsyncCallback:
         run_id = make_uuid()
         await cb.on_chain_start({}, {}, run_id=run_id, parent_run_id=None)
         await cb.on_chain_end({}, run_id=run_id, parent_run_id=None)
-        db.complete_run.assert_called_once_with(str(run_id))
+        db.complete_run.assert_called_once()
+        assert db.complete_run.call_args.args[0] == str(run_id)
 
     async def test_on_chain_error_root_fails_run(self):
         cb, db = self._make()

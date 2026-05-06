@@ -12,26 +12,32 @@ _log = logging.getLogger(__name__)
 
 _CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS runs (
-    run_id      TEXT PRIMARY KEY,
-    graph_id    TEXT,
-    thread_id   TEXT,
-    status      TEXT DEFAULT 'running',
-    started_at  TIMESTAMPTZ DEFAULT NOW(),
-    ended_at    TIMESTAMPTZ,
-    error       TEXT
+    run_id               TEXT PRIMARY KEY,
+    graph_id             TEXT,
+    thread_id            TEXT,
+    status               TEXT DEFAULT 'running',
+    started_at           TIMESTAMPTZ DEFAULT NOW(),
+    ended_at             TIMESTAMPTZ,
+    error                TEXT,
+    total_input_tokens   INTEGER,
+    total_output_tokens  INTEGER,
+    estimated_cost_usd   DOUBLE PRECISION
 );
 
 CREATE TABLE IF NOT EXISTS events (
-    id          SERIAL PRIMARY KEY,
-    run_id      TEXT,
-    graph_id    TEXT,
-    event_type  TEXT,
-    node_name   TEXT,
-    latency_ms  DOUBLE PRECISION,
-    payload     JSONB,
-    error       TEXT,
-    messages    JSONB,
-    timestamp   TIMESTAMPTZ DEFAULT NOW()
+    id            SERIAL PRIMARY KEY,
+    run_id        TEXT,
+    graph_id      TEXT,
+    event_type    TEXT,
+    node_name     TEXT,
+    latency_ms    DOUBLE PRECISION,
+    payload       JSONB,
+    error         TEXT,
+    messages      JSONB,
+    input_tokens  INTEGER,
+    output_tokens INTEGER,
+    model         TEXT,
+    timestamp     TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_started_at  ON runs(started_at DESC);
@@ -39,6 +45,13 @@ CREATE INDEX IF NOT EXISTS idx_runs_graph_id    ON runs(graph_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status      ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_events_run_id    ON events(run_id);
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
+
+ALTER TABLE runs   ADD COLUMN IF NOT EXISTS total_input_tokens  INTEGER;
+ALTER TABLE runs   ADD COLUMN IF NOT EXISTS total_output_tokens INTEGER;
+ALTER TABLE runs   ADD COLUMN IF NOT EXISTS estimated_cost_usd  DOUBLE PRECISION;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS input_tokens        INTEGER;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS output_tokens       INTEGER;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS model               TEXT;
 """
 
 
@@ -95,13 +108,24 @@ class PostgresMonitorDB(AbstractMonitorDB):
             return
         _log.debug("create_run inserted run_id=%s graph_id=%s", run_id, graph_id)
 
-    def complete_run(self, run_id: str) -> None:
+    def complete_run(
+        self,
+        run_id: str,
+        total_input_tokens: int | None = None,
+        total_output_tokens: int | None = None,
+        estimated_cost_usd: float | None = None,
+    ) -> None:
         conn = self._connection
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE runs SET status = 'completed', ended_at = %s WHERE run_id = %s",
-                    (datetime.now(timezone.utc), run_id),
+                    """
+                    UPDATE runs
+                    SET status = 'completed', ended_at = %s,
+                        total_input_tokens = %s, total_output_tokens = %s, estimated_cost_usd = %s
+                    WHERE run_id = %s
+                    """,
+                    (datetime.now(timezone.utc), total_input_tokens, total_output_tokens, estimated_cost_usd, run_id),
                 )
                 if cur.rowcount == 0:
                     _log.warning("complete_run: no run found with id %s", run_id)
@@ -137,6 +161,9 @@ class PostgresMonitorDB(AbstractMonitorDB):
         payload: dict | None = None,
         error: str | None = None,
         messages: list[dict] | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        model: str | None = None,
     ) -> None:
         conn = self._connection
         try:
@@ -144,8 +171,9 @@ class PostgresMonitorDB(AbstractMonitorDB):
                 cur.execute(
                     """
                     INSERT INTO events
-                        (run_id, graph_id, event_type, node_name, latency_ms, payload, error, messages, timestamp)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        (run_id, graph_id, event_type, node_name, latency_ms, payload, error,
+                         messages, input_tokens, output_tokens, model, timestamp)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         run_id,
@@ -156,6 +184,9 @@ class PostgresMonitorDB(AbstractMonitorDB):
                         json.dumps(payload or {}),
                         error,
                         json.dumps(messages) if messages is not None else None,
+                        input_tokens,
+                        output_tokens,
+                        model,
                         datetime.now(timezone.utc),
                     ),
                 )

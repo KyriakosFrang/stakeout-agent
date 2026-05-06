@@ -174,7 +174,8 @@ class TestCrewLifecycle:
         cb, db, bus = _make()
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
         bus.emit(CrewKickoffCompletedEvent, None, _crew_completed_event())
-        db.complete_run.assert_called_once_with(cb._run_id)
+        db.complete_run.assert_called_once()
+        assert db.complete_run.call_args.args[0] == cb._run_id
 
     def test_crew_error_fails_run(self):
         cb, db, bus = _make()
