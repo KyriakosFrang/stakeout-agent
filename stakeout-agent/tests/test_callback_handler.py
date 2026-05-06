@@ -4,6 +4,9 @@ import time
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, LLMResult
+
 from stakeout_agent.callback_handler import AsyncLangGraphMonitorCallback, LangGraphMonitorCallback, _MonitorBase
 
 
@@ -94,6 +97,7 @@ class TestSafeTruncate:
         result = _MonitorBase._safe_truncate(inputs)
         assert isinstance(result, str)
         import json
+
         # Result must be valid JSON (from the json.dumps path with default=str)
         parsed = json.loads(result)
         assert "messages" in parsed
@@ -309,3 +313,101 @@ class TestAsyncCallback:
         events = [c.kwargs["event_type"] for c in db.insert_event.call_args_list]
         assert "tool_call" in events
         assert "tool_result" in events
+
+
+# ---------------------------------------------------------------------------
+# LLM payload capture
+# ---------------------------------------------------------------------------
+
+
+def _make_llm_result(text: str, llm_output: dict | None = None) -> LLMResult:
+    gen = ChatGeneration(message=AIMessage(content=text), text=text)
+    return LLMResult(generations=[[gen]], llm_output=llm_output or {})
+
+
+class FakeMessage:
+    def __init__(self, role_type: str, content: str):
+        self.type = role_type
+        self.content = content
+
+
+class TestLLMPayloadCapture:
+    def _make(self, **kwargs) -> tuple[LangGraphMonitorCallback, MagicMock]:
+        db = mock_db()
+        cb = LangGraphMonitorCallback(graph_id=GRAPH_ID, thread_id=THREAD_ID, db=db, **kwargs)
+        return cb, db
+
+    def _run_node_with_llm(self, cb, db, messages, response_text):
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start({"name": "agent"}, {}, run_id=node_id, parent_run_id=root_id)
+        cb.on_chat_model_start({}, [messages], run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_llm_end(_make_llm_result(response_text), run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
+        return db.insert_event.call_args_list[-1].kwargs
+
+    def test_llm_input_captured_on_node_end(self):
+        cb, db = self._make()
+        msgs = [FakeMessage("system", "You are helpful."), FakeMessage("human", "Hi")]
+        kwargs = self._run_node_with_llm(cb, db, msgs, "Hello!")
+        assert kwargs["llm_input"] == [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "human", "content": "Hi"},
+        ]
+
+    def test_llm_output_captured_on_node_end(self):
+        cb, db = self._make()
+        kwargs = self._run_node_with_llm(cb, db, [FakeMessage("human", "ping")], "pong")
+        assert kwargs["llm_output"] == "pong"
+
+    def test_capture_payloads_false_omits_llm_fields(self):
+        cb, db = self._make(capture_payloads=False)
+        kwargs = self._run_node_with_llm(cb, db, [FakeMessage("human", "hello")], "hi")
+        assert kwargs["llm_input"] is None
+        assert kwargs["llm_output"] is None
+
+    def test_max_payload_chars_truncates_input_content(self):
+        cb, db = self._make(max_payload_chars=5)
+        long_msg = FakeMessage("human", "x" * 100)
+        kwargs = self._run_node_with_llm(cb, db, [long_msg], "short")
+        assert len(kwargs["llm_input"][0]["content"]) == 5
+
+    def test_max_payload_chars_truncates_output(self):
+        cb, db = self._make(max_payload_chars=3)
+        kwargs = self._run_node_with_llm(cb, db, [FakeMessage("human", "q")], "long response text")
+        assert kwargs["llm_output"] == "lon"
+
+    def test_on_llm_start_plain_prompts_stored_as_user_role(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id)
+        cb.on_llm_start({}, ["tell me a joke"], run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
+        kwargs = db.insert_event.call_args_list[-1].kwargs
+        assert kwargs["llm_input"] == [{"role": "user", "content": "tell me a joke"}]
+
+    def test_node_without_llm_call_has_no_llm_fields(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id)
+        cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
+        kwargs = db.insert_event.call_args_list[-1].kwargs
+        assert kwargs["llm_input"] is None
+        assert kwargs["llm_output"] is None
+
+    def test_llm_inputs_cleared_after_run_completes(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id)
+        cb.on_chat_model_start({}, [[FakeMessage("human", "hi")]], run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
+        cb.on_chain_end({}, run_id=root_id, parent_run_id=None)
+        assert cb._llm_inputs == {}
+        assert cb._llm_outputs == {}

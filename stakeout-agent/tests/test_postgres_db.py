@@ -74,8 +74,9 @@ class TestCompleteRun:
         mock_cursor.execute.assert_called_once()
         sql, params = mock_cursor.execute.call_args.args
         assert "completed" in sql
+        # params: (ended_at, total_input_tokens, total_output_tokens, estimated_cost_usd, run_id)
         assert isinstance(params[0], datetime)
-        assert params[1] == "run-1"
+        assert params[4] == "run-1"
 
     def test_write_error_is_logged_not_raised(self, caplog):
         mock_conn, mock_cursor = _make_mock_conn()
@@ -167,7 +168,12 @@ class TestInsertEvent:
         assert json.loads(params[5]) == {"x": 1}
         assert params[6] is None
         assert params[7] is None  # messages not provided
-        assert isinstance(params[8], datetime)
+        assert params[8] is None  # input_tokens not provided
+        assert params[9] is None  # output_tokens not provided
+        assert params[10] is None  # model not provided
+        assert params[11] is None  # llm_input not provided
+        assert params[12] is None  # llm_output not provided
+        assert isinstance(params[13], datetime)
 
     def test_payload_defaults_to_empty_dict(self):
         mock_conn, mock_cursor = _make_mock_conn()

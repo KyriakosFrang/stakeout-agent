@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import MagicMock
 
 from crewai.events.types.crew_events import (
@@ -9,6 +10,7 @@ from crewai.events.types.crew_events import (
     CrewKickoffFailedEvent,
     CrewKickoffStartedEvent,
 )
+from crewai.events.types.llm_events import LLMCallCompletedEvent, LLMCallStartedEvent, LLMCallType
 from crewai.events.types.task_events import TaskCompletedEvent, TaskFailedEvent, TaskStartedEvent
 from crewai.events.types.tool_usage_events import (
     ToolUsageErrorEvent,
@@ -359,3 +361,131 @@ class TestAsyncCrewAICallback:
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "error"
         assert kwargs["error"] == "Async refused"
+
+
+# ---------------------------------------------------------------------------
+# LLM payload capture (CrewAI)
+# ---------------------------------------------------------------------------
+
+
+def _llm_started(task_name: str, messages: list[dict] | str | None, call_id: str = "c1") -> LLMCallStartedEvent:
+    return LLMCallStartedEvent(call_id=call_id, task_name=task_name, messages=messages)
+
+
+def _llm_completed(
+    task_name: str, response: Any, call_id: str = "c1", call_type=LLMCallType.LLM_CALL
+) -> LLMCallCompletedEvent:
+    return LLMCallCompletedEvent(call_id=call_id, task_name=task_name, response=response, call_type=call_type)
+
+
+class TestCrewAIPayloadCapture:
+    def _run_task_with_llm(self, cb, db, bus, messages, response, task_name="analyse data"):
+        bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+        cb._node_start_times[task_name] = time.monotonic()
+        bus.emit(LLMCallStartedEvent, None, _llm_started(task_name, messages))
+        bus.emit(LLMCallCompletedEvent, None, _llm_completed(task_name, response))
+        bus.emit(TaskCompletedEvent, None, _task_completed_event(task_name=task_name))
+        return db.insert_event.call_args.kwargs
+
+    def test_llm_input_list_captured_on_node_end(self):
+        cb, db, bus = _make()
+        msgs = [{"role": "system", "content": "Be helpful."}, {"role": "user", "content": "Summarise this."}]
+        kwargs = self._run_task_with_llm(cb, db, bus, msgs, "Summary here.")
+        assert kwargs["llm_input"] == [
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": "Summarise this."},
+        ]
+
+    def test_llm_output_string_captured_on_node_end(self):
+        cb, db, bus = _make()
+        kwargs = self._run_task_with_llm(cb, db, bus, [{"role": "user", "content": "q"}], "The answer.")
+        assert kwargs["llm_output"] == "The answer."
+
+    def test_llm_string_messages_stored_as_user_role(self):
+        cb, db, bus = _make()
+        kwargs = self._run_task_with_llm(cb, db, bus, "plain prompt", "reply")
+        assert kwargs["llm_input"] == [{"role": "user", "content": "plain prompt"}]
+
+    def test_capture_payloads_false_omits_llm_fields(self):
+        db = MagicMock()
+        bus = MockBus()
+        import crewai.events.base_event_listener as _mod
+
+        original = _mod.crewai_event_bus
+        _mod.crewai_event_bus = bus
+        try:
+            cb = CrewAIMonitorCallback(crew_id=CREW_ID, thread_id=THREAD_ID, db=db, capture_payloads=False)
+        finally:
+            _mod.crewai_event_bus = original
+        kwargs = self._run_task_with_llm(cb, db, bus, [{"role": "user", "content": "hi"}], "hello")
+        assert kwargs["llm_input"] is None
+        assert kwargs["llm_output"] is None
+
+    def test_max_payload_chars_truncates_input(self):
+        db = MagicMock()
+        bus = MockBus()
+        import crewai.events.base_event_listener as _mod
+
+        original = _mod.crewai_event_bus
+        _mod.crewai_event_bus = bus
+        try:
+            cb = CrewAIMonitorCallback(crew_id=CREW_ID, thread_id=THREAD_ID, db=db, max_payload_chars=4)
+        finally:
+            _mod.crewai_event_bus = original
+        kwargs = self._run_task_with_llm(cb, db, bus, [{"role": "user", "content": "long input text"}], "ok")
+        assert kwargs["llm_input"][0]["content"] == "long"
+
+    def test_max_payload_chars_truncates_output(self):
+        db = MagicMock()
+        bus = MockBus()
+        import crewai.events.base_event_listener as _mod
+
+        original = _mod.crewai_event_bus
+        _mod.crewai_event_bus = bus
+        try:
+            cb = CrewAIMonitorCallback(crew_id=CREW_ID, thread_id=THREAD_ID, db=db, max_payload_chars=3)
+        finally:
+            _mod.crewai_event_bus = original
+        kwargs = self._run_task_with_llm(cb, db, bus, [{"role": "user", "content": "q"}], "long response")
+        assert kwargs["llm_output"] == "lon"
+
+    def test_tool_call_completion_does_not_store_output(self):
+        """LLMCallStartedEvent has no call_type, so inputs are always captured.
+        LLMCallCompletedEvent with TOOL_CALL type skips storing the response text."""
+        cb, db, bus = _make()
+        bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+        cb._node_start_times["analyse data"] = time.monotonic()
+        bus.emit(
+            LLMCallStartedEvent,
+            None,
+            LLMCallStartedEvent(
+                call_id="c1",
+                task_name="analyse data",
+                messages=[{"role": "user", "content": "call tool"}],
+            ),
+        )
+        bus.emit(
+            LLMCallCompletedEvent,
+            None,
+            LLMCallCompletedEvent(
+                call_id="c1",
+                task_name="analyse data",
+                response="<tool call>",
+                call_type=LLMCallType.TOOL_CALL,
+            ),
+        )
+        bus.emit(TaskCompletedEvent, None, _task_completed_event(task_name="analyse data"))
+        kwargs = db.insert_event.call_args.kwargs
+        # Input IS captured (no call_type on start event)
+        assert kwargs["llm_input"] == [{"role": "user", "content": "call tool"}]
+        # Output is NOT captured (TOOL_CALL completion filtered out)
+        assert kwargs["llm_output"] is None
+
+    def test_node_without_llm_call_has_no_llm_fields(self):
+        cb, db, bus = _make()
+        bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+        cb._node_start_times["write report"] = time.monotonic()
+        bus.emit(TaskCompletedEvent, None, _task_completed_event())
+        kwargs = db.insert_event.call_args.kwargs
+        assert kwargs["llm_input"] is None
+        assert kwargs["llm_output"] is None

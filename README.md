@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-   One callback. Every run, node, and tool call — captured automatically into MongoDB or PostgreSQL. No changes to your agent code.
+   One callback. Every run, node, tool call, token count, prompt, and response — captured automatically into MongoDB or PostgreSQL. No changes to your agent code.
 </p>
 
 <p align="center">
@@ -47,7 +47,7 @@ monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
 result = graph.invoke(inputs, config={"callbacks": [monitor]})
 ```
 
-That's it. Every node execution, tool call, latency, and error is now in your database.
+That's it. Every node execution, tool call, latency, token count, prompt, response, and error is now in your database.
 
 ---
 
@@ -61,7 +61,7 @@ graph LR
     D --> E
 ```
 
-stakeout-agent hooks into your framework's event system. It records a `run` document for each invocation and an `event` document for every node start/end, tool call, tool result, and error — with latency tracked at every step.
+stakeout-agent hooks into your framework's event system. It records a `run` document for each invocation and an `event` document for every node start/end, tool call, tool result, and error — with latency, token usage, and the actual prompts and responses captured at every step.
 
 ---
 
@@ -72,6 +72,8 @@ stakeout-agent hooks into your framework's event system. It records a `run` docu
 | Lines of integration code | **3** |
 | Crashes your app on DB failure | **Never** — errors are logged, not raised |
 | Node-level latency (P95) | **Yes** — tracked per node and per tool |
+| Token usage & cost | **Yes** — per node and run, cost estimation opt-in |
+| Prompt & response capture | **Yes** — per node, opt-out, truncation supported |
 | Frameworks | **LangGraph + CrewAI** |
 | Backends | **MongoDB + PostgreSQL** |
 | Dashboard included | **Yes** — Streamlit, zero config |

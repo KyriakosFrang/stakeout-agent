@@ -4,7 +4,8 @@ import json
 import logging
 import threading
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 from uuid import UUID
 
 from stakeout_agent.backends.base import AbstractMonitorDB
@@ -38,6 +39,8 @@ class _MonitorBase:
         db: AbstractMonitorDB | None = None,
         pricing=None,
         token_extractor: Callable[[dict], tuple[int | None, int | None, str | None]] | None = None,
+        capture_payloads: bool = True,
+        max_payload_chars: int | None = None,
     ):
         self.graph_id = graph_id
         self.thread_id = thread_id
@@ -48,6 +51,8 @@ class _MonitorBase:
         self.db = db
         self._pricing = pricing
         self._token_extractor = token_extractor or _default_token_extractor
+        self.capture_payloads = capture_payloads
+        self._max_payload_chars = max_payload_chars
         self._log = logging.LoggerAdapter(_logger, {"graph_id": graph_id, "thread_id": thread_id})
 
         self._state_lock = threading.Lock()
@@ -57,6 +62,9 @@ class _MonitorBase:
         self._tool_start_times: dict[str, float] = {}
         # Per-node token accumulation keyed by node run_id
         self._node_tokens: dict[str, dict] = {}
+        # Per-node LLM prompt/response capture keyed by node run_id
+        self._llm_inputs: dict[str, list[dict]] = {}
+        self._llm_outputs: dict[str, str] = {}
         # Run-level token totals
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
@@ -121,6 +129,8 @@ class _MonitorBase:
                 node_name = self._node_names.pop(run_id_str, "unknown")
                 current_run_id = self._run_id
                 tok = self._node_tokens.pop(run_id_str, {})
+                llm_input = self._llm_inputs.pop(run_id_str, None) if self.capture_payloads else None
+                llm_output = self._llm_outputs.pop(run_id_str, None) if self.capture_payloads else None
             input_tokens = tok.get("input") or None
             output_tokens = tok.get("output") or None
             model = tok.get("model")
@@ -136,6 +146,8 @@ class _MonitorBase:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 model=model,
+                llm_input=llm_input,
+                llm_output=llm_output,
             )
 
     def _handle_chain_error(
@@ -222,30 +234,47 @@ class _MonitorBase:
             error=error_str,
         )
 
-    def _handle_llm_end(self, metadata: dict, parent_run_id: UUID | None) -> None:
-        """Accumulate token counts from a completed LLM call."""
-        input_tok, output_tok, model = self._token_extractor(metadata)
-        if input_tok is None and output_tok is None:
+    def _handle_llm_start(self, formatted_messages: list[dict], parent_run_id: UUID | None) -> None:
+        """Store LLM prompt messages for the enclosing node, keyed by the node's run_id."""
+        if not self.capture_payloads or parent_run_id is None:
             return
+        if self._max_payload_chars is not None:
+            formatted_messages = [
+                {"role": m["role"], "content": m["content"][: self._max_payload_chars]} for m in formatted_messages
+            ]
+        key = str(parent_run_id)
+        with self._state_lock:
+            self._llm_inputs.setdefault(key, []).extend(formatted_messages)
+
+    def _handle_llm_end(self, metadata: dict, parent_run_id: UUID | None, output_text: str | None = None) -> None:
+        """Accumulate token counts and capture LLM output text from a completed LLM call."""
+        input_tok, output_tok, model = self._token_extractor(metadata)
 
         in_tok = input_tok or 0
         out_tok = output_tok or 0
 
         with self._state_lock:
-            self._total_input_tokens += in_tok
-            self._total_output_tokens += out_tok
+            if input_tok is not None or output_tok is not None:
+                self._total_input_tokens += in_tok
+                self._total_output_tokens += out_tok
 
-            if parent_run_id is not None:
-                key = str(parent_run_id)
-                entry = self._node_tokens.setdefault(key, {"input": 0, "output": 0, "model": None})
-                entry["input"] += in_tok
-                entry["output"] += out_tok
-                if model:
-                    entry["model"] = model
+                if parent_run_id is not None:
+                    key = str(parent_run_id)
+                    entry = self._node_tokens.setdefault(key, {"input": 0, "output": 0, "model": None})
+                    entry["input"] += in_tok
+                    entry["output"] += out_tok
+                    if model:
+                        entry["model"] = model
 
-            if self._pricing is not None:
-                cost = self._pricing.estimate_cost(model, in_tok, out_tok)
-                if cost is not None:
+            if self.capture_payloads and parent_run_id is not None and output_text is not None:
+                if self._max_payload_chars is not None:
+                    output_text = output_text[: self._max_payload_chars]
+                self._llm_outputs[str(parent_run_id)] = output_text
+
+        if self._pricing is not None and (input_tok is not None or output_tok is not None):
+            cost = self._pricing.estimate_cost(model, in_tok, out_tok)
+            if cost is not None:
+                with self._state_lock:
                     self._total_cost = (self._total_cost or 0.0) + cost
 
     def _clear_timing_state(self) -> None:
@@ -254,6 +283,8 @@ class _MonitorBase:
         self._node_names.clear()
         self._tool_start_times.clear()
         self._node_tokens.clear()
+        self._llm_inputs.clear()
+        self._llm_outputs.clear()
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self._total_cost = None
