@@ -16,6 +16,10 @@ from .base import _MonitorBase
 class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
     """Sync monitor for use with graph.invoke().
 
+    **Do not share a single instance across concurrent invocations.** Per-run state
+    (_run_id, timing dicts) is stored on the instance; a second concurrent call will
+    overwrite it and corrupt both runs. Create a new instance for each graph.invoke() call.
+
     Usage:
         monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
         graph.invoke(inputs, config={"callbacks": [monitor]})
@@ -142,6 +146,10 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
 
 class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
     """Async monitor for use with graph.ainvoke() / graph.astream().
+
+    **Do not share a single instance across concurrent invocations.** Per-run state
+    (_run_id, timing dicts) is stored on the instance; concurrent calls via asyncio.gather
+    will overwrite each other's state. Create a new instance for each graph.ainvoke() call.
 
     Usage:
         monitor = AsyncLangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")

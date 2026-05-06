@@ -138,6 +138,25 @@ monitor = AsyncCrewAIMonitorCallback(crew_id="my_crew", thread_id="thread_123")
 await crew.akickoff(inputs={...})
 ```
 
+### One instance per invocation
+
+Each callback instance stores per-run state (run ID, node timings, token accumulators) as instance variables. **Do not share a single instance across concurrent invocations** — a second call will overwrite the first run's state, causing events to be written under the wrong run ID and latencies to be miscalculated.
+
+```python
+# Wrong — shared instance, concurrent calls corrupt each other
+monitor = AsyncLangGraphMonitorCallback(graph_id="g", thread_id="t")
+await asyncio.gather(
+    graph.ainvoke(inputs_a, config={"callbacks": [monitor]}),
+    graph.ainvoke(inputs_b, config={"callbacks": [monitor]}),
+)
+
+# Correct — separate instance per invocation
+await asyncio.gather(
+    graph.ainvoke(inputs_a, config={"callbacks": [AsyncLangGraphMonitorCallback(graph_id="g", thread_id="t")]}),
+    graph.ainvoke(inputs_b, config={"callbacks": [AsyncLangGraphMonitorCallback(graph_id="g", thread_id="t")]}),
+)
+```
+
 ---
 
 ## Token usage and cost tracking

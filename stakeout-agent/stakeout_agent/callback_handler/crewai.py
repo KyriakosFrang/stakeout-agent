@@ -66,6 +66,12 @@ def _extract_crewai_response_text(response: Any) -> str | None:
 class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
     """Sync monitor for use with crew.kickoff().
 
+    **Do not share a single instance across concurrent kickoffs or across multiple Crew
+    objects.** Per-run state (_run_id, timing dicts) is stored on the instance and keyed
+    by task/tool name; concurrent runs will overwrite each other's state and produce wrong
+    latencies or events written under the wrong run ID. Create a new instance per
+    crew.kickoff() call.
+
     Usage:
         monitor = CrewAIMonitorCallback(crew_id="my_crew", thread_id="thread_123")
         crew.kickoff(inputs={...})
@@ -237,6 +243,11 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
     Registers async event handlers so the CrewAI event bus routes them through
     its async pipeline. PyMongo calls are offloaded to a thread-pool executor to
     avoid blocking the event loop.
+
+    **Do not share a single instance across concurrent kickoffs.** Per-run state
+    (_run_id, timing dicts) is stored on the instance and keyed by task/tool name;
+    concurrent async runs will overwrite each other's state. Create a new instance per
+    crew.kickoff_async() call.
 
     Usage:
         monitor = AsyncCrewAIMonitorCallback(crew_id="my_crew", thread_id="thread_123")
