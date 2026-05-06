@@ -4,7 +4,7 @@ import json
 import logging
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID
 
 from stakeout_agent.backends.base import AbstractMonitorDB
@@ -12,10 +12,33 @@ from stakeout_agent.backends.base import AbstractMonitorDB
 _logger = logging.getLogger(__name__)
 
 
+def _default_token_extractor(metadata: dict) -> tuple[int | None, int | None, str | None]:
+    """Extract (input_tokens, output_tokens, model) from LLM response metadata.
+
+    Covers OpenAI (token_usage / model_name) and Anthropic (usage / model) conventions.
+    """
+    # OpenAI: llm_output["token_usage"] + model_name
+    usage = metadata.get("token_usage") or {}
+    if usage:
+        return usage.get("prompt_tokens"), usage.get("completion_tokens"), metadata.get("model_name")
+    # Anthropic: llm_output["usage"] + model
+    usage = metadata.get("usage") or {}
+    if usage:
+        return usage.get("input_tokens"), usage.get("output_tokens"), metadata.get("model")
+    return None, None, None
+
+
 class _MonitorBase:
     """Shared state and logic reused by all framework-specific callback handlers."""
 
-    def __init__(self, graph_id: str, thread_id: str, db: AbstractMonitorDB | None = None):
+    def __init__(
+        self,
+        graph_id: str,
+        thread_id: str,
+        db: AbstractMonitorDB | None = None,
+        pricing=None,
+        token_extractor: Callable[[dict], tuple[int | None, int | None, str | None]] | None = None,
+    ):
         self.graph_id = graph_id
         self.thread_id = thread_id
         if db is None:
@@ -23,6 +46,8 @@ class _MonitorBase:
 
             db = get_backend()
         self.db = db
+        self._pricing = pricing
+        self._token_extractor = token_extractor or _default_token_extractor
         self._log = logging.LoggerAdapter(_logger, {"graph_id": graph_id, "thread_id": thread_id})
 
         self._state_lock = threading.Lock()
@@ -30,6 +55,13 @@ class _MonitorBase:
         self._node_start_times: dict[str, float] = {}
         self._node_names: dict[str, str] = {}
         self._tool_start_times: dict[str, float] = {}
+        # Per-node token accumulation keyed by node run_id
+        self._node_tokens: dict[str, dict] = {}
+        # Run-level token totals
+        self._total_input_tokens: int = 0
+        self._total_output_tokens: int = 0
+        # None until first successful cost estimate; avoids confusing 0.0 with "not configured"
+        self._total_cost: float | None = None
 
     def _handle_chain_start(
         self,
@@ -72,14 +104,26 @@ class _MonitorBase:
         if parent_run_id is None:
             with self._state_lock:
                 current_run_id = self._run_id
+                total_in = self._total_input_tokens or None
+                total_out = self._total_output_tokens or None
+                cost = self._total_cost
                 self._clear_timing_state()
             self._log.debug("run completed run_id=%s", current_run_id)
-            self.db.complete_run(current_run_id)
+            self.db.complete_run(
+                current_run_id,
+                total_input_tokens=total_in,
+                total_output_tokens=total_out,
+                estimated_cost_usd=cost,
+            )
         else:
             with self._state_lock:
                 latency = self._pop_latency(self._node_start_times, run_id_str)
                 node_name = self._node_names.pop(run_id_str, "unknown")
                 current_run_id = self._run_id
+                tok = self._node_tokens.pop(run_id_str, {})
+            input_tokens = tok.get("input") or None
+            output_tokens = tok.get("output") or None
+            model = tok.get("model")
             self._log.debug("node_end node=%s latency_ms=%s run_id=%s", node_name, latency, current_run_id)
             self.db.insert_event(
                 run_id=current_run_id,
@@ -89,6 +133,9 @@ class _MonitorBase:
                 latency_ms=latency,
                 payload={"outputs": self._safe_truncate(outputs)},
                 messages=self._extract_messages(outputs),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                model=model,
             )
 
     def _handle_chain_error(
@@ -175,11 +222,41 @@ class _MonitorBase:
             error=error_str,
         )
 
+    def _handle_llm_end(self, metadata: dict, parent_run_id: UUID | None) -> None:
+        """Accumulate token counts from a completed LLM call."""
+        input_tok, output_tok, model = self._token_extractor(metadata)
+        if input_tok is None and output_tok is None:
+            return
+
+        in_tok = input_tok or 0
+        out_tok = output_tok or 0
+
+        with self._state_lock:
+            self._total_input_tokens += in_tok
+            self._total_output_tokens += out_tok
+
+            if parent_run_id is not None:
+                key = str(parent_run_id)
+                entry = self._node_tokens.setdefault(key, {"input": 0, "output": 0, "model": None})
+                entry["input"] += in_tok
+                entry["output"] += out_tok
+                if model:
+                    entry["model"] = model
+
+            if self._pricing is not None:
+                cost = self._pricing.estimate_cost(model, in_tok, out_tok)
+                if cost is not None:
+                    self._total_cost = (self._total_cost or 0.0) + cost
+
     def _clear_timing_state(self) -> None:
-        """Clear all timing state dictionaries to prevent memory leaks."""
+        """Clear all per-run state. Must be called under _state_lock."""
         self._node_start_times.clear()
         self._node_names.clear()
         self._tool_start_times.clear()
+        self._node_tokens.clear()
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._total_cost = None
         self._run_id = None
 
     @staticmethod

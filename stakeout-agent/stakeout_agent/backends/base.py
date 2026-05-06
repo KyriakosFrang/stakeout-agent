@@ -8,7 +8,13 @@ class AbstractMonitorDB(ABC):
     def create_run(self, run_id: str, graph_id: str, thread_id: str) -> None: ...
 
     @abstractmethod
-    def complete_run(self, run_id: str) -> None: ...
+    def complete_run(
+        self,
+        run_id: str,
+        total_input_tokens: int | None = None,
+        total_output_tokens: int | None = None,
+        estimated_cost_usd: float | None = None,
+    ) -> None: ...
 
     @abstractmethod
     def fail_run(self, run_id: str, error: str) -> None: ...
@@ -24,4 +30,7 @@ class AbstractMonitorDB(ABC):
         payload: dict | None = None,
         error: str | None = None,
         messages: list[dict] | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        model: str | None = None,
     ) -> None: ...
