@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import types
 from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import MagicMock, patch
@@ -9,6 +10,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from stakeout_agent.backends.postgres import PostgresMonitorDB
+
+
+def _make_pg_operational_error(msg: str = "connection refused") -> Exception:
+    """Construct a fake psycopg2.OperationalError without requiring psycopg2."""
+    mod = types.ModuleType("psycopg2")
+    exc_cls = type("OperationalError", (Exception,), {"__module__": "psycopg2"})
+    mod.OperationalError = exc_cls
+    return exc_cls(msg)
 
 
 def _make_mock_conn(rowcount: int = 1):
@@ -202,16 +211,71 @@ class TestInsertEvent:
 
 
 # ---------------------------------------------------------------------------
-# Connection failure
+# Connection failure and retry
 # ---------------------------------------------------------------------------
 
 
 class TestConnectionFailure:
-    def test_propagates_on_first_operation(self):
-        with patch("stakeout_agent.backends.postgres._make_pg_conn", side_effect=Exception("refused")):
+    def test_connection_failure_is_logged_not_raised(self, caplog):
+        err = _make_pg_operational_error("refused")
+        with (
+            patch("stakeout_agent.backends.postgres._make_pg_conn", side_effect=err),
+            patch("stakeout_agent.backends.postgres.time.sleep"),
+        ):
             pg = PostgresMonitorDB()
-            with pytest.raises(Exception, match="refused"):
-                pg.create_run("r", "g", "t")
+            pg.create_run("r", "g", "t")  # must not raise
+
+        assert any("create_run" in r.message for r in caplog.records)
+
+    def test_non_retryable_error_is_logged_not_raised(self, caplog):
+        mock_conn, mock_cursor = _make_mock_conn()
+        mock_cursor.execute.side_effect = Exception("constraint violation")
+        with patch("stakeout_agent.backends.postgres._make_pg_conn", return_value=mock_conn):
+            pg = PostgresMonitorDB()
+            pg.create_run("r", "g", "t")  # must not raise
+
+        assert any("create_run" in r.message for r in caplog.records)
+
+    def test_retries_up_to_max_attempts(self):
+        call_count = 0
+        err = _make_pg_operational_error("refused")
+
+        def flaky_make_conn():
+            nonlocal call_count
+            call_count += 1
+            raise err
+
+        with (
+            patch("stakeout_agent.backends.postgres._make_pg_conn", side_effect=flaky_make_conn),
+            patch("stakeout_agent.backends.postgres.time.sleep"),
+        ):
+            pg = PostgresMonitorDB()
+            pg.create_run("r", "g", "t")
+
+        from stakeout_agent.backends.postgres import _MAX_RETRIES
+
+        assert call_count == _MAX_RETRIES
+
+    def test_succeeds_on_retry_after_transient_failure(self):
+        mock_conn, mock_cursor = _make_mock_conn()
+        call_count = 0
+        err = _make_pg_operational_error("transient")
+
+        def flaky_make_conn():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise err
+            return mock_conn
+
+        with (
+            patch("stakeout_agent.backends.postgres._make_pg_conn", side_effect=flaky_make_conn),
+            patch("stakeout_agent.backends.postgres.time.sleep"),
+        ):
+            pg = PostgresMonitorDB()
+            pg.create_run("r", "g", "t")
+
+        mock_cursor.execute.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +369,7 @@ class TestReconnection:
         make_conn.assert_not_called()
         assert pg._conn is mock_conn
 
-    def test_create_run_resets_conn_after_connection_error(self):
+    def test_create_run_resets_conn_after_non_retryable_closed_conn(self):
         mock_conn, mock_cursor = _make_mock_conn()
 
         def fail_then_close(*_args, **_kwargs):
@@ -320,7 +384,7 @@ class TestReconnection:
 
         assert pg._conn is None
 
-    def test_insert_event_resets_conn_after_connection_error(self):
+    def test_insert_event_resets_conn_after_non_retryable_closed_conn(self):
         mock_conn, mock_cursor = _make_mock_conn()
 
         def fail_then_close(*_args, **_kwargs):

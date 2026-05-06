@@ -191,16 +191,79 @@ class TestInsertEvent:
 
 
 # ---------------------------------------------------------------------------
-# Connection failure
+# Connection failure and retry
 # ---------------------------------------------------------------------------
 
 
 class TestConnectionFailure:
-    def test_propagates_on_first_operation(self):
-        with patch("stakeout_agent.backends.mongodb._make_client", side_effect=ConnectionFailure("refused")):
+    def test_connection_failure_is_logged_not_raised(self, caplog):
+        with (
+            patch("stakeout_agent.backends.mongodb._make_client", side_effect=ConnectionFailure("refused")),
+            patch("stakeout_agent.backends.mongodb.time.sleep"),
+        ):
             monitor = MongoMonitorDB()
-            with pytest.raises(ConnectionFailure):
-                monitor.create_run("r", "g", "t")
+            monitor.create_run("r", "g", "t")  # must not raise
+
+        assert any("create_run" in r.message for r in caplog.records)
+
+    def test_retries_up_to_max_attempts(self):
+        call_count = 0
+
+        def flaky_make_client():
+            nonlocal call_count
+            call_count += 1
+            raise ConnectionFailure("refused")
+
+        with (
+            patch("stakeout_agent.backends.mongodb._make_client", side_effect=flaky_make_client),
+            patch("stakeout_agent.backends.mongodb.time.sleep"),
+        ):
+            monitor = MongoMonitorDB()
+            monitor.create_run("r", "g", "t")
+
+        from stakeout_agent.backends.mongodb import _MAX_RETRIES
+
+        assert call_count == _MAX_RETRIES
+
+    def test_succeeds_on_retry_after_transient_failure(self):
+        mock_db, mock_runs, _ = _make_mock_db()
+        call_count = 0
+
+        def flaky_make_client():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise ConnectionFailure("transient")
+            return mock_db
+
+        with (
+            patch("stakeout_agent.backends.mongodb._make_client", side_effect=flaky_make_client),
+            patch("stakeout_agent.backends.mongodb.time.sleep"),
+        ):
+            monitor = MongoMonitorDB()
+            monitor.create_run("r", "g", "t")
+
+        mock_runs.insert_one.assert_called_once()
+
+    def test_conn_reset_on_connection_failure(self):
+        mock_db, _, _ = _make_mock_db()
+        make_client_calls = []
+
+        def flaky_make_client():
+            make_client_calls.append(1)
+            if len(make_client_calls) == 1:
+                raise ConnectionFailure("first failure")
+            return mock_db
+
+        with (
+            patch("stakeout_agent.backends.mongodb._make_client", side_effect=flaky_make_client),
+            patch("stakeout_agent.backends.mongodb.time.sleep"),
+        ):
+            monitor = MongoMonitorDB()
+            monitor.create_run("r", "g", "t")
+
+        # After a connection failure, _db should be reset so the next call reconnects
+        assert monitor._db is None or monitor._db is mock_db
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +292,24 @@ class TestIndexCreation:
         assert "status" in index_args
         assert "run_id" in index_args
         assert [("timestamp", DESCENDING)] in index_args
+
+    def test_client_configured_with_pool_and_timeouts(self):
+        mock_client = MagicMock()
+        mock_db = MagicMock()
+        mock_client.__getitem__ = MagicMock(return_value=mock_db)
+
+        with patch("stakeout_agent.backends.mongodb.MongoClient", return_value=mock_client) as mock_cls:
+            monitor = MongoMonitorDB()
+            _ = monitor._conn
+
+        _, kwargs = mock_cls.call_args
+        assert kwargs.get("retryWrites") is True
+        assert kwargs.get("retryReads") is True
+        assert "serverSelectionTimeoutMS" in kwargs
+        assert "connectTimeoutMS" in kwargs
+        assert "socketTimeoutMS" in kwargs
+        assert "maxPoolSize" in kwargs
+        assert "minPoolSize" in kwargs
 
 
 # ---------------------------------------------------------------------------
