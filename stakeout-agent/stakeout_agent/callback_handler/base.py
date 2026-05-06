@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from typing import Any
 from uuid import UUID
@@ -24,6 +25,7 @@ class _MonitorBase:
         self.db = db
         self._log = logging.LoggerAdapter(_logger, {"graph_id": graph_id, "thread_id": thread_id})
 
+        self._state_lock = threading.Lock()
         self._run_id: str | None = None
         self._node_start_times: dict[str, float] = {}
         self._node_names: dict[str, str] = {}
@@ -39,16 +41,19 @@ class _MonitorBase:
     ) -> None:
         run_id_str = str(run_id)
         if parent_run_id is None:
-            self._run_id = run_id_str
+            with self._state_lock:
+                self._run_id = run_id_str
             self._log.debug("run started run_id=%s", run_id_str)
             self.db.create_run(run_id_str, self.graph_id, self.thread_id)
         else:
             node_name = self._extract_name(serialized, kwargs)
-            self._node_start_times[run_id_str] = time.monotonic()
-            self._node_names[run_id_str] = node_name
-            self._log.debug("node_start node=%s run_id=%s", node_name, self._run_id)
+            with self._state_lock:
+                self._node_start_times[run_id_str] = time.monotonic()
+                self._node_names[run_id_str] = node_name
+                current_run_id = self._run_id
+            self._log.debug("node_start node=%s run_id=%s", node_name, current_run_id)
             self.db.insert_event(
-                run_id=self._run_id,
+                run_id=current_run_id,
                 graph_id=self.graph_id,
                 event_type="node_start",
                 node_name=node_name,
@@ -65,15 +70,19 @@ class _MonitorBase:
     ) -> None:
         run_id_str = str(run_id)
         if parent_run_id is None:
-            self._log.debug("run completed run_id=%s", self._run_id)
-            self.db.complete_run(self._run_id)
-            self._clear_timing_state()
+            with self._state_lock:
+                current_run_id = self._run_id
+                self._clear_timing_state()
+            self._log.debug("run completed run_id=%s", current_run_id)
+            self.db.complete_run(current_run_id)
         else:
-            latency = self._pop_latency(self._node_start_times, run_id_str)
-            node_name = self._node_names.pop(run_id_str, "unknown")
-            self._log.debug("node_end node=%s latency_ms=%s run_id=%s", node_name, latency, self._run_id)
+            with self._state_lock:
+                latency = self._pop_latency(self._node_start_times, run_id_str)
+                node_name = self._node_names.pop(run_id_str, "unknown")
+                current_run_id = self._run_id
+            self._log.debug("node_end node=%s latency_ms=%s run_id=%s", node_name, latency, current_run_id)
             self.db.insert_event(
-                run_id=self._run_id,
+                run_id=current_run_id,
                 graph_id=self.graph_id,
                 event_type="node_end",
                 node_name=node_name,
@@ -92,15 +101,19 @@ class _MonitorBase:
         run_id_str = str(run_id)
         error_str = f"{type(error).__name__}: {str(error)}"
         if parent_run_id is None:
-            self._log.warning("run failed run_id=%s error=%s", self._run_id, error_str)
-            self.db.fail_run(self._run_id, error_str)
-            self._clear_timing_state()
+            with self._state_lock:
+                current_run_id = self._run_id
+                self._clear_timing_state()
+            self._log.warning("run failed run_id=%s error=%s", current_run_id, error_str)
+            self.db.fail_run(current_run_id, error_str)
         else:
-            latency = self._pop_latency(self._node_start_times, run_id_str)
-            node_name = self._node_names.pop(run_id_str, "unknown")
-            self._log.warning("node error node=%s run_id=%s error=%s", node_name, self._run_id, error_str)
+            with self._state_lock:
+                latency = self._pop_latency(self._node_start_times, run_id_str)
+                node_name = self._node_names.pop(run_id_str, "unknown")
+                current_run_id = self._run_id
+            self._log.warning("node error node=%s run_id=%s error=%s", node_name, current_run_id, error_str)
             self.db.insert_event(
-                run_id=self._run_id,
+                run_id=current_run_id,
                 graph_id=self.graph_id,
                 event_type="error",
                 node_name=node_name,
@@ -117,10 +130,12 @@ class _MonitorBase:
     ) -> None:
         run_id_str = str(run_id)
         tool_name = serialized.get("name", "unknown_tool") if serialized else kwargs.get("name", "unknown_tool")
-        self._tool_start_times[run_id_str] = time.monotonic()
-        self._log.debug("tool_call tool=%s run_id=%s", tool_name, self._run_id)
+        with self._state_lock:
+            self._tool_start_times[run_id_str] = time.monotonic()
+            current_run_id = self._run_id
+        self._log.debug("tool_call tool=%s run_id=%s", tool_name, current_run_id)
         self.db.insert_event(
-            run_id=self._run_id,
+            run_id=current_run_id,
             graph_id=self.graph_id,
             event_type="tool_call",
             node_name=tool_name,
@@ -129,11 +144,13 @@ class _MonitorBase:
 
     def _handle_tool_end(self, output: Any, run_id: UUID, **kwargs: Any) -> None:
         run_id_str = str(run_id)
-        latency = self._pop_latency(self._tool_start_times, run_id_str)
         tool_name = kwargs.get("name", "unknown_tool")
-        self._log.debug("tool_result tool=%s latency_ms=%s run_id=%s", tool_name, latency, self._run_id)
+        with self._state_lock:
+            latency = self._pop_latency(self._tool_start_times, run_id_str)
+            current_run_id = self._run_id
+        self._log.debug("tool_result tool=%s latency_ms=%s run_id=%s", tool_name, latency, current_run_id)
         self.db.insert_event(
-            run_id=self._run_id,
+            run_id=current_run_id,
             graph_id=self.graph_id,
             event_type="tool_result",
             node_name=tool_name,
@@ -143,18 +160,19 @@ class _MonitorBase:
 
     def _handle_tool_error(self, error: BaseException, run_id: UUID, **kwargs: Any) -> None:
         run_id_str = str(run_id)
-        latency = self._pop_latency(self._tool_start_times, run_id_str)
         tool_name = kwargs.get("name", "unknown_tool")
-        self._log.warning(
-            "tool error tool=%s run_id=%s error=%s", tool_name, self._run_id, f"{type(error).__name__}: {error}"
-        )
+        with self._state_lock:
+            latency = self._pop_latency(self._tool_start_times, run_id_str)
+            current_run_id = self._run_id
+        error_str = f"{type(error).__name__}: {str(error)}"
+        self._log.warning("tool error tool=%s run_id=%s error=%s", tool_name, current_run_id, error_str)
         self.db.insert_event(
-            run_id=self._run_id,
+            run_id=current_run_id,
             graph_id=self.graph_id,
             event_type="error",
             node_name=tool_name,
             latency_ms=latency,
-            error=f"{type(error).__name__}: {str(error)}",
+            error=error_str,
         )
 
     def _clear_timing_state(self) -> None:
