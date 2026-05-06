@@ -5,8 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "stakeout-agent"
 version = "0.0.7.1"
-description = "Drop-in monitoring for GenAI applications"
+description = "Drop-in observability for LangGraph and CrewAI — captures every run, node, tool call, token count, prompt, and response into MongoDB or PostgreSQL"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.3",
@@ -14,15 +15,39 @@ dependencies = [
     "pymongo>=4.0",
 ]
 authors = [
-    { name = "Kyriakos Fragkeskos" }
+    { name = "Kyriakos Fragkeskos", email = "kyriakos.frangeskos@gmail.com" }
+]
+keywords = [
+    "langgraph",
+    "crewai",
+    "observability",
+    "monitoring",
+    "llm",
+    "genai",
+    "agent",
+    "tracing",
+    "langchain",
 ]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+    "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://github.com/KyriakosFrang/stakeout-agent"
+Repository = "https://github.com/KyriakosFrang/stakeout-agent"
+"Bug Tracker" = "https://github.com/KyriakosFrang/stakeout-agent/issues"
 
 [project.optional-dependencies]
 postgres = ["psycopg2-binary>=2.9"]
