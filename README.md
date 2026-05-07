@@ -77,7 +77,7 @@ stakeout-agent hooks into your framework's event system. It records a `run` docu
 | Prompt & response capture | **Yes** — per node, opt-out, truncation supported |
 | Frameworks | **LangGraph + CrewAI** |
 | Backends | **MongoDB + PostgreSQL** |
-| Dashboard included | **Yes** — [dedicated Streamlit app](https://github.com/KyriakosFrang/stakeout-dashboard) |
+| Dashboard included | **Yes** — [dedicated real-time observability UI](https://github.com/KyriakosFrang/stakeout-dashboard) |
 
 ---
 
