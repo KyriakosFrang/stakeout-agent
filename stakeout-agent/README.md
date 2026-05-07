@@ -77,7 +77,7 @@ stakeout-agent hooks into your framework's event system. It records a `run` docu
 | Prompt & response capture | **Yes** — per node, opt-out, truncation supported |
 | Frameworks | **LangGraph + CrewAI** |
 | Backends | **MongoDB + PostgreSQL** |
-| Dashboard included | **Yes** — Streamlit, zero config |
+| Dashboard included | **Yes** — [dedicated Streamlit app](https://github.com/KyriakosFrang/stakeout-dashboard) |
 
 ---
 
@@ -270,21 +270,16 @@ Both options apply identically to `AsyncLangGraphMonitorCallback`, `CrewAIMonito
 
 ## Dashboard
 
-Visualise runs, node timelines, and tool call details with the included Streamlit dashboard:
+A dedicated dashboard repository is available at **[stakeout-dashboard](https://github.com/KyriakosFrang/stakeout-dashboard)** — a standalone Streamlit app that connects to your MongoDB or PostgreSQL backend and visualises everything stakeout-agent captures.
 
-```bash
-docker compose up -d mongo
-cd stakeout-agent
-uv run python examples/seed_demo_data.py   # optional: load demo data
-uv run --with streamlit streamlit run examples/dashboard.py
-```
-
-Open `http://localhost:8501`. The dashboard shows:
+The dashboard shows:
 
 - **Run History** — recent runs, status, duration, and a runs-over-time chart
 - **Node Performance** — average and P95 latency per node and tool, error counts
 - **Run Inspector** — full event timeline for any individual run
 - **Thread Deep Dive** — multi-turn conversation view across all runs in a thread
+
+See the [stakeout-dashboard README](https://github.com/KyriakosFrang/stakeout-dashboard) for setup and configuration instructions.
 
 ---
 
@@ -490,7 +485,7 @@ stakeout_agent/
 - [x] Token usage tracking (per node and per run)
 - [x] Cost estimation with configurable pricing map
 - [x] Prompt and response capture per node (`capture_payloads`, `max_payload_chars`)
-- [x] Streamlit dashboard (Run History, Node Performance, Run Inspector, Thread Deep Dive)
+- [x] [Dedicated Streamlit dashboard](https://github.com/KyriakosFrang/stakeout-dashboard) (Run History, Node Performance, Run Inspector, Thread Deep Dive)
 - [ ] Additional agentic frameworks (PydanticAI, SemanticKernel, AutoGen etc.)
 - [ ] Additional storage backends (SQLite, Redis, ...)
 
