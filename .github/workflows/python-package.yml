@@ -46,7 +46,7 @@ jobs:
       - name: Run tests
         run: |
           if [[ "${{ matrix.python-version }}" == "3.10" ]]; then
-            uv run --with pytest --with langgraph --with mongodb --with postgres --with "creawai>=0.80" pytest
+            uv run --with pytest --extra langgraph --extra mongodb --extra postgres --extra crewai pytest
           else
-            uv run --with pytest --with langgraph --with mongodb --with postgres --with "creawai>=0.80" pytest
+            uv run --with pytest --extra langgraph --extra mongodb --extra postgres --extra crewai pytest
           fi
