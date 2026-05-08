@@ -5,8 +5,18 @@ from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
-from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackHandler
-from langchain_core.outputs import LLMResult
+try:
+    from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackHandler
+    from langchain_core.outputs import LLMResult
+except ImportError:
+
+    class BaseCallbackHandler:  # type: ignore[no-redef]
+        pass
+
+    class AsyncCallbackHandler:  # type: ignore[no-redef]
+        pass
+
+    LLMResult = None  # type: ignore[assignment]
 
 from stakeout_agent.backends.base import AbstractMonitorDB
 
@@ -35,6 +45,11 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         capture_payloads: bool = True,
         max_payload_chars: int | None = None,
     ):
+        if LLMResult is None:
+            raise ImportError(
+                "langchain-core is required for LangGraphMonitorCallback. "
+                "Install it with: pip install 'stakeout-agent[langgraph]'"
+            )
         _MonitorBase.__init__(
             self,
             graph_id,
@@ -166,6 +181,11 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         capture_payloads: bool = True,
         max_payload_chars: int | None = None,
     ):
+        if LLMResult is None:
+            raise ImportError(
+                "langchain-core is required for AsyncLangGraphMonitorCallback. "
+                "Install it with: pip install 'stakeout-agent[langgraph]'"
+            )
         _MonitorBase.__init__(
             self,
             graph_id,

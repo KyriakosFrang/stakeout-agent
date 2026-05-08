@@ -12,12 +12,18 @@ def _hide_modules(*prefixes: str):
     Inserts None sentinels so that any `import <prefix>` raises ImportError.
     Also covers already-loaded submodules like langchain_core.callbacks so that
     re-importing a package that uses them still fails correctly.
+
+    Also saves and restores all stakeout_agent.* modules because _reimport_stakeout
+    deletes and recreates them, which would otherwise leave new module objects in
+    sys.modules and break patches in subsequent tests.
     """
     to_hide: set[str] = set(prefixes)
     for name in list(sys.modules):
         for prefix in prefixes:
             if name == prefix or name.startswith(prefix + "."):
                 to_hide.add(name)
+        if name == "stakeout_agent" or name.startswith("stakeout_agent."):
+            to_hide.add(name)
 
     original = {name: sys.modules.get(name, _MISSING) for name in to_hide}
     for name in to_hide:
@@ -30,6 +36,10 @@ def _hide_modules(*prefixes: str):
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = val
+        # Remove any new stakeout_agent.* modules that _reimport_stakeout added
+        for name in list(sys.modules):
+            if (name == "stakeout_agent" or name.startswith("stakeout_agent.")) and name not in original:
+                sys.modules.pop(name, None)
 
 
 _MISSING = object()

@@ -5,19 +5,37 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from crewai.events.base_event_listener import BaseEventListener
-from crewai.events.types.crew_events import (
-    CrewKickoffCompletedEvent,
-    CrewKickoffFailedEvent,
-    CrewKickoffStartedEvent,
-)
-from crewai.events.types.llm_events import LLMCallCompletedEvent, LLMCallStartedEvent, LLMCallType
-from crewai.events.types.task_events import TaskCompletedEvent, TaskFailedEvent, TaskStartedEvent
-from crewai.events.types.tool_usage_events import (
-    ToolUsageErrorEvent,
-    ToolUsageFinishedEvent,
-    ToolUsageStartedEvent,
-)
+try:
+    from crewai.events.base_event_listener import BaseEventListener
+    from crewai.events.types.crew_events import (
+        CrewKickoffCompletedEvent,
+        CrewKickoffFailedEvent,
+        CrewKickoffStartedEvent,
+    )
+    from crewai.events.types.llm_events import LLMCallCompletedEvent, LLMCallStartedEvent, LLMCallType
+    from crewai.events.types.task_events import TaskCompletedEvent, TaskFailedEvent, TaskStartedEvent
+    from crewai.events.types.tool_usage_events import (
+        ToolUsageErrorEvent,
+        ToolUsageFinishedEvent,
+        ToolUsageStartedEvent,
+    )
+except ImportError:
+
+    class BaseEventListener:  # type: ignore[no-redef]
+        pass
+
+    CrewKickoffCompletedEvent = None  # type: ignore[assignment,misc]
+    CrewKickoffFailedEvent = None  # type: ignore[assignment,misc]
+    CrewKickoffStartedEvent = None  # type: ignore[assignment,misc]
+    LLMCallCompletedEvent = None  # type: ignore[assignment,misc]
+    LLMCallStartedEvent = None  # type: ignore[assignment,misc]
+    LLMCallType = None  # type: ignore[assignment,misc]
+    TaskCompletedEvent = None  # type: ignore[assignment,misc]
+    TaskFailedEvent = None  # type: ignore[assignment,misc]
+    TaskStartedEvent = None  # type: ignore[assignment,misc]
+    ToolUsageErrorEvent = None  # type: ignore[assignment,misc]
+    ToolUsageFinishedEvent = None  # type: ignore[assignment,misc]
+    ToolUsageStartedEvent = None  # type: ignore[assignment,misc]
 
 from stakeout_agent.backends.base import AbstractMonitorDB
 from stakeout_agent.callback_handler.base import _MonitorBase
@@ -85,6 +103,10 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
         capture_payloads: bool = True,
         max_payload_chars: int | None = None,
     ) -> None:
+        if CrewKickoffStartedEvent is None:
+            raise ImportError(
+                "crewai is required for CrewAIMonitorCallback. Install it with: pip install 'stakeout-agent[crewai]'"
+            )
         _MonitorBase.__init__(
             self, crew_id, thread_id, db, capture_payloads=capture_payloads, max_payload_chars=max_payload_chars
         )
@@ -262,6 +284,11 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
         capture_payloads: bool = True,
         max_payload_chars: int | None = None,
     ) -> None:
+        if CrewKickoffStartedEvent is None:
+            raise ImportError(
+                "crewai is required for AsyncCrewAIMonitorCallback. "
+                "Install it with: pip install 'stakeout-agent[crewai]'"
+            )
         _MonitorBase.__init__(
             self, crew_id, thread_id, db, capture_payloads=capture_payloads, max_payload_chars=max_payload_chars
         )
