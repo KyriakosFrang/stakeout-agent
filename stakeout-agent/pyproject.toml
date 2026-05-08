@@ -4,16 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "stakeout-agent"
-version = "0.0.8.1"
+version = "0.0.9"
 description = "Drop-in observability for LangGraph and CrewAI — captures every run, node, tool call, token count, prompt, and response into MongoDB or PostgreSQL"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-dependencies = [
-    "langchain-core>=0.3",
-    "langgraph>=1.1.9",
-    "pymongo>=4.0",
-]
+dependencies = []
 authors = [
     { name = "Kyriakos Fragkeskos" }
 ]
@@ -50,6 +46,8 @@ Repository = "https://github.com/KyriakosFrang/stakeout-agent"
 "Bug Tracker" = "https://github.com/KyriakosFrang/stakeout-agent/issues"
 
 [project.optional-dependencies]
+langgraph = ["langchain-core>=0.3", "langgraph>=1.1.9"]
+mongodb = ["pymongo>=4.0"]
 postgres = ["psycopg2-binary>=2.9"]
 crewai = ["crewai>=0.80"]
 
