@@ -447,6 +447,81 @@ logging.getLogger("stakeout_agent").setLevel(logging.DEBUG)
 
 ---
 
+## Threads and conversation history
+
+### What `thread_id` means
+
+`thread_id` is a label you assign to group related invocations together — typically a user session or a multi-turn conversation. stakeout-agent stores it on every run but does not manage it:
+
+```
+thread_id          ← your conversation identifier (you supply this)
+  └── run_id       ← one graph.invoke() / crew.kickoff() call (generated per execution)
+        └── events ← node_start, node_end, tool_call, tool_result, error
+```
+
+Every time you call `graph.invoke(...)` with the same `thread_id`, a new `run` is created under that thread. The `events` for each run are stored in order of `timestamp`.
+
+### Viewing all steps in a conversation
+
+To reconstruct the full execution history of a conversation, query runs by `thread_id` and then fetch events for each run in timestamp order.
+
+**MongoDB:**
+
+```python
+from stakeout_agent import MongoMonitorDB
+
+db = MongoMonitorDB()
+
+thread_id = "thread_123"
+
+runs = list(db.runs.find({"thread_id": thread_id}).sort("started_at", 1))
+for run in runs:
+    print(f"\n--- Run {run['_id']} ({run['status']}) ---")
+    events = list(db.events.find({"run_id": run["_id"]}).sort("timestamp", 1))
+    for ev in events:
+        print(f"  [{ev['timestamp']}] {ev['event_type']:12s}  node={ev['node_name']}")
+```
+
+**PostgreSQL:**
+
+```sql
+SELECT r.run_id, e.timestamp, e.event_type, e.node_name, e.latency_ms, e.error
+FROM events e
+JOIN runs r ON r.run_id = e.run_id
+WHERE r.thread_id = 'thread_123'
+ORDER BY e.timestamp ASC;
+```
+
+The [stakeout-dashboard](https://github.com/KyriakosFrang/stakeout-dashboard) **Thread Deep Dive** view does exactly this — select any `thread_id` and see every run and every step in chronological order.
+
+### stakeout-agent is not a LangGraph checkpointer
+
+LangGraph has a built-in [persistence layer](https://langchain-ai.github.io/langgraph/concepts/persistence/) that saves graph **state** at each step using a `checkpointer` (e.g. `MemorySaver`, `SqliteSaver`). This lets you:
+
+- Pause and resume execution mid-graph
+- Re-enter a graph from any previous checkpoint
+- Enable human-in-the-loop interrupts
+
+stakeout-agent is an **observability layer**, not a checkpointer. It records what happened during a run (nodes executed, payloads, latency, tokens, prompts) but does not capture enough state to re-execute or resume a graph. It answers "what did this run do?" rather than "replay from step 3."
+
+The two tools serve different purposes and do not conflict — you can use both simultaneously:
+
+```python
+from langgraph.checkpoint.memory import MemorySaver
+from stakeout_agent import LangGraphMonitorCallback
+
+# LangGraph checkpointer handles state persistence and replay
+graph = graph_builder.compile(checkpointer=MemorySaver())
+
+# stakeout-agent handles observability
+monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
+result = graph.invoke(inputs, config={"callbacks": [monitor], "configurable": {"thread_id": "thread_123"}})
+```
+
+Note that LangGraph's `thread_id` (passed in `config["configurable"]`) and stakeout-agent's `thread_id` are independent — both can be set to the same value for consistency, but they serve different systems.
+
+---
+
 ## Querying the database directly
 
 ### MongoDB
