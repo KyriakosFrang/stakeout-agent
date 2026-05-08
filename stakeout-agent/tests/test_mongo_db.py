@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-import pytest
 from pymongo.errors import ConnectionFailure, OperationFailure
 
 from stakeout_agent.backends.mongodb import MongoMonitorDB
