@@ -14,6 +14,8 @@ class AbstractMonitorDB(ABC):
         total_input_tokens: int | None = None,
         total_output_tokens: int | None = None,
         estimated_cost_usd: float | None = None,
+        total_cache_read_tokens: int | None = None,
+        total_cache_creation_tokens: int | None = None,
     ) -> None: ...
 
     @abstractmethod
@@ -35,4 +37,6 @@ class AbstractMonitorDB(ABC):
         model: str | None = None,
         llm_input: list[dict] | None = None,
         llm_output: str | None = None,
+        cache_read_tokens: int | None = None,
+        cache_creation_tokens: int | None = None,
     ) -> None: ...

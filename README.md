@@ -196,6 +196,8 @@ result = graph.invoke(inputs, config={"callbacks": [monitor]})
 
 Token fields (`input_tokens`, `output_tokens`, `model`) appear on `node_end` events and `total_input_tokens` / `total_output_tokens` on the run document whenever the LLM response contains usage metadata.
 
+Cache token fields (`cache_read_tokens`, `cache_creation_tokens`) are captured automatically for providers that report them — Anthropic (prompt caching) and OpenAI (cached inputs). They appear on `node_end` events and roll up as `total_cache_read_tokens` / `total_cache_creation_tokens` on the run document.
+
 ### Cost estimation (opt-in)
 
 ```python
@@ -395,7 +397,9 @@ One document per graph/crew invocation.
   "error": null,
   "total_input_tokens": 1850,
   "total_output_tokens": 420,
-  "estimated_cost_usd": 0.01553
+  "estimated_cost_usd": 0.01553,
+  "total_cache_read_tokens": 1200,
+  "total_cache_creation_tokens": 650
 }
 ```
 
@@ -432,7 +436,9 @@ One document per node/task start/end, tool call, or error.
 | `node_end` | A graph node or crew task completes | present | present when LLM was called | present when LLM was called and `capture_payloads=True` |
 | `tool_call` | A tool is invoked | absent | absent | absent |
 | `tool_result` | A tool returns a result | present | absent | absent |
-| `error` | A node, task, or tool raises an exception | present | absent | absent |
+| `retriever_start` | A LangChain retriever starts (RAG) | absent | absent | absent |
+| `retriever_end` | A retriever returns documents | present | absent | absent |
+| `error` | A node, task, tool, or retriever raises an exception | present | absent | absent |
 
 ---
 
