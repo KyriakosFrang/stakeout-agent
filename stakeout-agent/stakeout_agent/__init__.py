@@ -1,7 +1,23 @@
-from stakeout_agent.backends.mongodb import MongoMonitorDB
-from stakeout_agent.backends.postgres import PostgresMonitorDB
-from stakeout_agent.callback_handler import AsyncLangGraphMonitorCallback, LangGraphMonitorCallback
-from stakeout_agent.callback_handler.crewai import AsyncCrewAIMonitorCallback, CrewAIMonitorCallback
+try:
+    from stakeout_agent.backends.mongodb import MongoMonitorDB
+except ImportError:
+    pass
+
+try:
+    from stakeout_agent.backends.postgres import PostgresMonitorDB
+except ImportError:
+    pass
+
+try:
+    from stakeout_agent.callback_handler import AsyncLangGraphMonitorCallback, LangGraphMonitorCallback
+except ImportError:
+    pass
+
+try:
+    from stakeout_agent.callback_handler.crewai import AsyncCrewAIMonitorCallback, CrewAIMonitorCallback
+except ImportError:
+    pass
+
 from stakeout_agent.pricing import ModelPricing, PricingMap
 
 __all__ = [

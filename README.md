@@ -37,7 +37,17 @@
 ## Install and go
 
 ```bash
-pip install stakeout-agent
+# LangGraph + MongoDB
+pip install 'stakeout-agent[langgraph,mongodb]'
+
+# LangGraph + PostgreSQL
+pip install 'stakeout-agent[langgraph,postgres]'
+
+# CrewAI + MongoDB
+pip install 'stakeout-agent[crewai,mongodb]'
+
+# CrewAI + PostgreSQL
+pip install 'stakeout-agent[crewai,postgres]'
 ```
 
 ```python
@@ -83,16 +93,28 @@ stakeout-agent hooks into your framework's event system. It records a `run` docu
 
 ## Installation
 
+Install only what you need — framework and backend are independent extras:
+
 ```bash
-# MongoDB backend (default)
-pip install stakeout-agent
+# LangGraph + MongoDB
+pip install 'stakeout-agent[langgraph,mongodb]'
 
-# PostgreSQL backend
-pip install 'stakeout-agent[postgres]'
+# LangGraph + PostgreSQL
+pip install 'stakeout-agent[langgraph,postgres]'
 
-# CrewAI support
-pip install 'stakeout-agent[crewai]'
+# CrewAI + MongoDB
+pip install 'stakeout-agent[crewai,mongodb]'
+
+# CrewAI + PostgreSQL
+pip install 'stakeout-agent[crewai,postgres]'
 ```
+
+| Extra | Installs | Use when |
+|---|---|---|
+| `langgraph` | `langchain-core`, `langgraph` | Using LangGraph |
+| `crewai` | `crewai` | Using CrewAI |
+| `mongodb` | `pymongo` | Storing to MongoDB |
+| `postgres` | `psycopg2-binary` | Storing to PostgreSQL |
 
 Requires Python 3.10+.
 
@@ -292,7 +314,7 @@ A self-contained example that requires no LLM API key — nodes are pure Python 
 ```bash
 docker compose up -d mongo
 cd stakeout-agent
-uv run python examples/dummy_app.py
+uv run --extra langgraph --extra mongodb python examples/dummy_app.py
 ```
 
 ### CrewAI
@@ -304,7 +326,7 @@ Requires a running MongoDB instance and an OpenAI API key (or configure a differ
 ```bash
 docker compose up -d mongo
 cd stakeout-agent
-OPENAI_API_KEY=sk-... uv run --with crewai python examples/dummy_crewai_app.py
+OPENAI_API_KEY=sk-... uv run --extra crewai --extra mongodb python examples/dummy_crewai_app.py
 ```
 
 **Async:**
@@ -312,7 +334,7 @@ OPENAI_API_KEY=sk-... uv run --with crewai python examples/dummy_crewai_app.py
 ```bash
 docker compose up -d mongo
 cd stakeout-agent
-OPENAI_API_KEY=sk-... uv run --with crewai python examples/dummy_crewai_async_app.py
+OPENAI_API_KEY=sk-... uv run --extra crewai --extra mongodb python examples/dummy_crewai_async_app.py
 ```
 
 Each example runs a two-agent crew (Researcher + Writer) with a `MultiplyTool`, then prints the `runs` and `events` documents written to MongoDB.
@@ -485,7 +507,7 @@ stakeout_agent/
 - [x] Token usage tracking (per node and per run)
 - [x] Cost estimation with configurable pricing map
 - [x] Prompt and response capture per node (`capture_payloads`, `max_payload_chars`)
-- [x] [Dedicated Streamlit dashboard](https://github.com/KyriakosFrang/stakeout-dashboard) (Run History, Node Performance, Run Inspector, Thread Deep Dive)
+- [x] [Dedicated UI dashboard](https://github.com/KyriakosFrang/stakeout-dashboard) (Run History, Node Performance, Run Inspector, Thread Deep Dive)
 - [ ] Additional agentic frameworks (PydanticAI, SemanticKernel, AutoGen etc.)
 - [ ] Additional storage backends (SQLite, Redis, ...)
 
