@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 from stakeout_agent.callback_handler import AsyncLangGraphMonitorCallback, LangGraphMonitorCallback, _MonitorBase
+from stakeout_agent.callback_handler.base import _extract_cache_tokens
 
 
 def make_uuid() -> UUID:
@@ -424,6 +425,194 @@ class TestLLMPayloadCapture:
         cb.on_tool_start({"name": "t"}, "input", run_id=tool_id)
         cb.on_tool_end("result", run_id=tool_id, name="t")
         assert cb.dropped_events == 2
+
+    def test_tags_included_in_node_start_payload(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id, tags=["prod", "v2"])
+        kwargs = db.insert_event.call_args.kwargs
+        assert kwargs["payload"]["tags"] == ["prod", "v2"]
+
+    def test_tags_absent_when_not_provided(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start({"name": "n"}, {}, run_id=node_id, parent_run_id=root_id)
+        kwargs = db.insert_event.call_args.kwargs
+        assert "tags" not in kwargs["payload"]
+
+    def test_on_tool_start_uses_structured_inputs_when_available(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        tool_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_tool_start({"name": "search"}, '{"q": "hello"}', run_id=tool_id, inputs={"q": "hello"})
+        kwargs = db.insert_event.call_args.kwargs
+        assert '"q"' in kwargs["payload"]["input"]
+        assert "hello" in kwargs["payload"]["input"]
+
+    def test_on_tool_start_falls_back_to_input_str(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        tool_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_tool_start({"name": "search"}, "raw query", run_id=tool_id)
+        kwargs = db.insert_event.call_args.kwargs
+        assert kwargs["payload"]["input"] == "raw query"
+
+    def test_on_retriever_start_inserts_retriever_start_event(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        ret_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_retriever_start({"id": ["pkg", "VectorStoreRetriever"]}, "what is RAG?", run_id=ret_id)
+        kwargs = db.insert_event.call_args.kwargs
+        assert kwargs["event_type"] == "retriever_start"
+        assert kwargs["node_name"] == "VectorStoreRetriever"
+        assert kwargs["payload"]["query"] == "what is RAG?"
+
+    def test_on_retriever_end_inserts_retriever_end_event_with_latency_and_doc_count(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        ret_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_retriever_start({"id": ["pkg", "VectorStoreRetriever"]}, "query", run_id=ret_id)
+        cb.on_retriever_end(["doc1", "doc2", "doc3"], run_id=ret_id)
+        kwargs = db.insert_event.call_args.kwargs
+        assert kwargs["event_type"] == "retriever_end"
+        assert kwargs["payload"]["document_count"] == 3
+        assert kwargs["latency_ms"] is not None
+
+    def test_on_retriever_error_inserts_error_event(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        ret_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_retriever_start({"id": ["pkg", "VectorStoreRetriever"]}, "query", run_id=ret_id)
+        cb.on_retriever_error(ConnectionError("index unavailable"), run_id=ret_id)
+        kwargs = db.insert_event.call_args.kwargs
+        assert kwargs["event_type"] == "error"
+        assert "ConnectionError" in kwargs["error"]
+        assert kwargs["latency_ms"] is not None
+
+    def test_anthropic_cache_tokens_stored_on_node_end(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start({"name": "agent"}, {}, run_id=node_id, parent_run_id=root_id)
+        llm_output = {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 80,
+                "cache_creation_input_tokens": 20,
+            }
+        }
+        cb.on_llm_end(_make_llm_result("ok", llm_output), run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
+        kwargs = db.insert_event.call_args_list[-1].kwargs
+        assert kwargs["cache_read_tokens"] == 80
+        assert kwargs["cache_creation_tokens"] == 20
+
+    def test_openai_cache_tokens_stored_on_node_end(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start({"name": "agent"}, {}, run_id=node_id, parent_run_id=root_id)
+        llm_output = {
+            "token_usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "prompt_tokens_details": {"cached_tokens": 60},
+            },
+            "model_name": "gpt-4o",
+        }
+        cb.on_llm_end(_make_llm_result("ok", llm_output), run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
+        kwargs = db.insert_event.call_args_list[-1].kwargs
+        assert kwargs["cache_read_tokens"] == 60
+        assert kwargs["cache_creation_tokens"] is None
+
+    def test_cache_tokens_rolled_up_to_run(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start({"name": "agent"}, {}, run_id=node_id, parent_run_id=root_id)
+        llm_output = {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 80,
+                "cache_creation_input_tokens": 20,
+            }
+        }
+        cb.on_llm_end(_make_llm_result("ok", llm_output), run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
+        cb.on_chain_end({}, run_id=root_id, parent_run_id=None)
+        kwargs = db.complete_run.call_args.kwargs
+        assert kwargs["total_cache_read_tokens"] == 80
+        assert kwargs["total_cache_creation_tokens"] == 20
+
+    def test_no_cache_tokens_when_absent(self):
+        cb, db = self._make()
+        root_id = make_uuid()
+        node_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
+        cb.on_chain_start({"name": "agent"}, {}, run_id=node_id, parent_run_id=root_id)
+        llm_output = {"token_usage": {"prompt_tokens": 100, "completion_tokens": 50}, "model_name": "gpt-4o"}
+        cb.on_llm_end(_make_llm_result("ok", llm_output), run_id=make_uuid(), parent_run_id=node_id)
+        cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
+        kwargs = db.insert_event.call_args_list[-1].kwargs
+        assert kwargs["cache_read_tokens"] is None
+        assert kwargs["cache_creation_tokens"] is None
+
+
+class TestExtractCacheTokens:
+    def test_anthropic_both_fields(self):
+        meta = {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 80,
+                "cache_creation_input_tokens": 20,
+            }
+        }
+        assert _extract_cache_tokens(meta) == (80, 20)
+
+    def test_anthropic_read_only(self):
+        meta = {"usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 40}}
+        cr, cc = _extract_cache_tokens(meta)
+        assert cr == 40
+        assert cc is None
+
+    def test_openai_cached_tokens(self):
+        meta = {
+            "token_usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "prompt_tokens_details": {"cached_tokens": 60},
+            }
+        }
+        assert _extract_cache_tokens(meta) == (60, None)
+
+    def test_no_cache_fields(self):
+        meta = {"token_usage": {"prompt_tokens": 100, "completion_tokens": 50}}
+        assert _extract_cache_tokens(meta) == (None, None)
+
+    def test_empty_metadata(self):
+        assert _extract_cache_tokens({}) == (None, None)
+
+
+class TestLLMPayloadClearance:
+    def _make(self, **kwargs) -> tuple[LangGraphMonitorCallback, MagicMock]:
+        db = mock_db()
+        return LangGraphMonitorCallback(graph_id=GRAPH_ID, thread_id=THREAD_ID, db=db, **kwargs), db
 
     def test_llm_inputs_cleared_after_run_completes(self):
         cb, db = self._make()

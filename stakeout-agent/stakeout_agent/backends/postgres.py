@@ -16,32 +16,36 @@ _RETRY_BACKOFF_BASE = 0.5  # seconds; doubles each attempt
 
 _CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS runs (
-    run_id               TEXT PRIMARY KEY,
-    graph_id             TEXT,
-    thread_id            TEXT,
-    status               TEXT DEFAULT 'running',
-    started_at           TIMESTAMPTZ DEFAULT NOW(),
-    ended_at             TIMESTAMPTZ,
-    error                TEXT,
-    total_input_tokens   INTEGER,
-    total_output_tokens  INTEGER,
-    estimated_cost_usd   DOUBLE PRECISION
+    run_id                      TEXT PRIMARY KEY,
+    graph_id                    TEXT,
+    thread_id                   TEXT,
+    status                      TEXT DEFAULT 'running',
+    started_at                  TIMESTAMPTZ DEFAULT NOW(),
+    ended_at                    TIMESTAMPTZ,
+    error                       TEXT,
+    total_input_tokens          INTEGER,
+    total_output_tokens         INTEGER,
+    estimated_cost_usd          DOUBLE PRECISION,
+    total_cache_read_tokens     INTEGER,
+    total_cache_creation_tokens INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS events (
-    id            SERIAL PRIMARY KEY,
-    run_id        TEXT,
-    graph_id      TEXT,
-    event_type    TEXT,
-    node_name     TEXT,
-    latency_ms    DOUBLE PRECISION,
-    payload       JSONB,
-    error         TEXT,
-    messages      JSONB,
-    input_tokens  INTEGER,
-    output_tokens INTEGER,
-    model         TEXT,
-    timestamp     TIMESTAMPTZ DEFAULT NOW()
+    id                   SERIAL PRIMARY KEY,
+    run_id               TEXT,
+    graph_id             TEXT,
+    event_type           TEXT,
+    node_name            TEXT,
+    latency_ms           DOUBLE PRECISION,
+    payload              JSONB,
+    error                TEXT,
+    messages             JSONB,
+    input_tokens         INTEGER,
+    output_tokens        INTEGER,
+    model                TEXT,
+    timestamp            TIMESTAMPTZ DEFAULT NOW(),
+    cache_read_tokens    INTEGER,
+    cache_creation_tokens INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_started_at  ON runs(started_at DESC);
@@ -50,14 +54,18 @@ CREATE INDEX IF NOT EXISTS idx_runs_status      ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_events_run_id    ON events(run_id);
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
 
-ALTER TABLE runs   ADD COLUMN IF NOT EXISTS total_input_tokens  INTEGER;
-ALTER TABLE runs   ADD COLUMN IF NOT EXISTS total_output_tokens INTEGER;
-ALTER TABLE runs   ADD COLUMN IF NOT EXISTS estimated_cost_usd  DOUBLE PRECISION;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS input_tokens        INTEGER;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS output_tokens       INTEGER;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS model               TEXT;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS llm_input           JSONB;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS llm_output          TEXT;
+ALTER TABLE runs   ADD COLUMN IF NOT EXISTS total_input_tokens          INTEGER;
+ALTER TABLE runs   ADD COLUMN IF NOT EXISTS total_output_tokens         INTEGER;
+ALTER TABLE runs   ADD COLUMN IF NOT EXISTS estimated_cost_usd          DOUBLE PRECISION;
+ALTER TABLE runs   ADD COLUMN IF NOT EXISTS total_cache_read_tokens     INTEGER;
+ALTER TABLE runs   ADD COLUMN IF NOT EXISTS total_cache_creation_tokens INTEGER;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS input_tokens                INTEGER;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS output_tokens               INTEGER;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS model                       TEXT;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS llm_input                   JSONB;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS llm_output                  TEXT;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS cache_read_tokens           INTEGER;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS cache_creation_tokens       INTEGER;
 """
 
 # Retryable psycopg2 error class names — checked by name so this module
@@ -154,6 +162,8 @@ class PostgresMonitorDB(AbstractMonitorDB):
         total_input_tokens: int | None = None,
         total_output_tokens: int | None = None,
         estimated_cost_usd: float | None = None,
+        total_cache_read_tokens: int | None = None,
+        total_cache_creation_tokens: int | None = None,
     ) -> None:
         def _op():
             with self._connection.cursor() as cur:
@@ -161,10 +171,19 @@ class PostgresMonitorDB(AbstractMonitorDB):
                     """
                     UPDATE runs
                     SET status = 'completed', ended_at = %s,
-                        total_input_tokens = %s, total_output_tokens = %s, estimated_cost_usd = %s
+                        total_input_tokens = %s, total_output_tokens = %s, estimated_cost_usd = %s,
+                        total_cache_read_tokens = %s, total_cache_creation_tokens = %s
                     WHERE run_id = %s
                     """,
-                    (datetime.now(timezone.utc), total_input_tokens, total_output_tokens, estimated_cost_usd, run_id),
+                    (
+                        datetime.now(timezone.utc),
+                        total_input_tokens,
+                        total_output_tokens,
+                        estimated_cost_usd,
+                        total_cache_read_tokens,
+                        total_cache_creation_tokens,
+                        run_id,
+                    ),
                 )
                 if cur.rowcount == 0:
                     _log.warning("complete_run: no run found with id %s", run_id)
@@ -202,6 +221,8 @@ class PostgresMonitorDB(AbstractMonitorDB):
         model: str | None = None,
         llm_input: list[dict] | None = None,
         llm_output: str | None = None,
+        cache_read_tokens: int | None = None,
+        cache_creation_tokens: int | None = None,
     ) -> None:
         def _op():
             with self._connection.cursor() as cur:
@@ -209,8 +230,9 @@ class PostgresMonitorDB(AbstractMonitorDB):
                     """
                     INSERT INTO events
                         (run_id, graph_id, event_type, node_name, latency_ms, payload, error,
-                         messages, input_tokens, output_tokens, model, llm_input, llm_output, timestamp)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         messages, input_tokens, output_tokens, model, llm_input, llm_output,
+                         cache_read_tokens, cache_creation_tokens, timestamp)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         run_id,
@@ -226,6 +248,8 @@ class PostgresMonitorDB(AbstractMonitorDB):
                         model,
                         json.dumps(llm_input) if llm_input is not None else None,
                         llm_output,
+                        cache_read_tokens,
+                        cache_creation_tokens,
                         datetime.now(timezone.utc),
                     ),
                 )

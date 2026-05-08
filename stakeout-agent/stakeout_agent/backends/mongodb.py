@@ -128,6 +128,8 @@ class MongoMonitorDB(AbstractMonitorDB):
         total_input_tokens: int | None = None,
         total_output_tokens: int | None = None,
         estimated_cost_usd: float | None = None,
+        total_cache_read_tokens: int | None = None,
+        total_cache_creation_tokens: int | None = None,
     ) -> None:
         def _op():
             update: dict = {"status": "completed", "ended_at": datetime.now(timezone.utc)}
@@ -137,6 +139,10 @@ class MongoMonitorDB(AbstractMonitorDB):
                 update["total_output_tokens"] = total_output_tokens
             if estimated_cost_usd is not None:
                 update["estimated_cost_usd"] = estimated_cost_usd
+            if total_cache_read_tokens is not None:
+                update["total_cache_read_tokens"] = total_cache_read_tokens
+            if total_cache_creation_tokens is not None:
+                update["total_cache_creation_tokens"] = total_cache_creation_tokens
             result = self._conn.runs.update_one({"_id": run_id}, {"$set": update})
             if result.matched_count == 0:
                 _log.warning("complete_run: no run found with id %s", run_id)
@@ -173,6 +179,8 @@ class MongoMonitorDB(AbstractMonitorDB):
         model: str | None = None,
         llm_input: list[dict] | None = None,
         llm_output: str | None = None,
+        cache_read_tokens: int | None = None,
+        cache_creation_tokens: int | None = None,
     ) -> None:
         def _op():
             doc: dict = {
@@ -198,6 +206,10 @@ class MongoMonitorDB(AbstractMonitorDB):
                 doc["llm_input"] = llm_input
             if llm_output is not None:
                 doc["llm_output"] = llm_output
+            if cache_read_tokens is not None:
+                doc["cache_read_tokens"] = cache_read_tokens
+            if cache_creation_tokens is not None:
+                doc["cache_creation_tokens"] = cache_creation_tokens
             self._conn.events.insert_one(doc)
             _log.debug("insert_event event_type=%s node=%s run_id=%s", event_type, node_name, run_id)
 

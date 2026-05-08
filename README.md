@@ -196,6 +196,8 @@ result = graph.invoke(inputs, config={"callbacks": [monitor]})
 
 Token fields (`input_tokens`, `output_tokens`, `model`) appear on `node_end` events and `total_input_tokens` / `total_output_tokens` on the run document whenever the LLM response contains usage metadata.
 
+Cache token fields (`cache_read_tokens`, `cache_creation_tokens`) are captured automatically for providers that report them — Anthropic (prompt caching) and OpenAI (cached inputs). They appear on `node_end` events and roll up as `total_cache_read_tokens` / `total_cache_creation_tokens` on the run document.
+
 ### Cost estimation (opt-in)
 
 ```python
@@ -395,7 +397,9 @@ One document per graph/crew invocation.
   "error": null,
   "total_input_tokens": 1850,
   "total_output_tokens": 420,
-  "estimated_cost_usd": 0.01553
+  "estimated_cost_usd": 0.01553,
+  "total_cache_read_tokens": 1200,
+  "total_cache_creation_tokens": 650
 }
 ```
 
@@ -432,7 +436,9 @@ One document per node/task start/end, tool call, or error.
 | `node_end` | A graph node or crew task completes | present | present when LLM was called | present when LLM was called and `capture_payloads=True` |
 | `tool_call` | A tool is invoked | absent | absent | absent |
 | `tool_result` | A tool returns a result | present | absent | absent |
-| `error` | A node, task, or tool raises an exception | present | absent | absent |
+| `retriever_start` | A LangChain retriever starts (RAG) | absent | absent | absent |
+| `retriever_end` | A retriever returns documents | present | absent | absent |
+| `error` | A node, task, tool, or retriever raises an exception | present | absent | absent |
 
 ---
 
@@ -494,81 +500,6 @@ ORDER BY e.timestamp ASC;
 
 The [stakeout-dashboard](https://github.com/KyriakosFrang/stakeout-dashboard) **Thread Deep Dive** view does exactly this — select any `thread_id` and see every run and every step in chronological order.
 
-### stakeout-agent is not a LangGraph checkpointer
-
-LangGraph has a built-in [persistence layer](https://langchain-ai.github.io/langgraph/concepts/persistence/) that saves graph **state** at each step using a `checkpointer` (e.g. `MemorySaver`, `SqliteSaver`). This lets you:
-
-- Pause and resume execution mid-graph
-- Re-enter a graph from any previous checkpoint
-- Enable human-in-the-loop interrupts
-
-stakeout-agent is an **observability layer**, not a checkpointer. It records what happened during a run (nodes executed, payloads, latency, tokens, prompts) but does not capture enough state to re-execute or resume a graph. It answers "what did this run do?" rather than "replay from step 3."
-
-The two tools serve different purposes and do not conflict — you can use both simultaneously:
-
-```python
-from langgraph.checkpoint.memory import MemorySaver
-from stakeout_agent import LangGraphMonitorCallback
-
-# LangGraph checkpointer handles state persistence and replay
-graph = graph_builder.compile(checkpointer=MemorySaver())
-
-# stakeout-agent handles observability
-monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
-result = graph.invoke(inputs, config={"callbacks": [monitor], "configurable": {"thread_id": "thread_123"}})
-```
-
-Note that LangGraph's `thread_id` (passed in `config["configurable"]`) and stakeout-agent's `thread_id` are independent — both can be set to the same value for consistency, but they serve different systems.
-
----
-
-## Querying the database directly
-
-### MongoDB
-
-```python
-from stakeout_agent import MongoMonitorDB
-
-db = MongoMonitorDB()
-runs = list(db.runs.find({"graph_id": "my_graph"}).sort("started_at", -1))
-events = list(db.events.find({"run_id": "<run_id>"}).sort("timestamp", 1))
-```
-
-### PostgreSQL
-
-```python
-import psycopg2
-
-conn = psycopg2.connect("postgresql://user:password@localhost/stakeout")
-with conn.cursor() as cur:
-    cur.execute("SELECT * FROM runs WHERE graph_id = %s ORDER BY started_at DESC", ("my_graph",))
-    runs = cur.fetchall()
-```
-
----
-
-## Extending stakeout-agent
-
-**New framework:** create a file under `callback_handler/` that inherits `_MonitorBase` and implements the target framework's callback protocol.
-
-**New database:** create a class that inherits `AbstractMonitorDB` and implement `create_run`, `complete_run`, `fail_run`, and `insert_event`.
-
-```
-stakeout_agent/
-├── backends/
-│   ├── base.py        # AbstractMonitorDB — shared interface
-│   ├── mongodb.py     # MongoMonitorDB
-│   ├── postgres.py    # PostgresMonitorDB
-│   └── __init__.py    # get_backend() factory
-├── callback_handler/
-│   ├── base.py        # _MonitorBase — framework-agnostic core logic
-│   ├── langgraph.py   # LangGraphMonitorCallback, AsyncLangGraphMonitorCallback
-│   ├── crewai.py      # CrewAIMonitorCallback, AsyncCrewAIMonitorCallback
-│   └── __init__.py
-├── pricing.py         # ModelPricing, PricingMap
-```
-
----
 
 ## Roadmap
 

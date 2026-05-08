@@ -69,10 +69,10 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
-        tags: list[str] | None = None,  # noqa: ARG002
+        tags: list[str] | None = None,
         **kwargs: Any,
     ) -> None:
-        self._handle_chain_start(serialized, inputs, run_id, parent_run_id, **kwargs)
+        self._handle_chain_start(serialized, inputs, run_id, parent_run_id, tags=tags, **kwargs)
 
     def on_chain_end(
         self,
@@ -101,15 +101,47 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,  # noqa: ARG002
+        inputs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        self._handle_tool_start(serialized, input_str, run_id, **kwargs)
+        self._handle_tool_start(serialized, input_str, run_id, inputs=inputs, **kwargs)
 
     def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
         self._handle_tool_end(output, run_id, **kwargs)
 
     def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
         self._handle_tool_error(error, run_id, **kwargs)
+
+    def on_retriever_start(
+        self,
+        serialized: dict[str, Any],
+        query: str,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,  # noqa: ARG002
+        **kwargs: Any,
+    ) -> None:
+        self._handle_retriever_start(serialized, query, run_id, **kwargs)
+
+    def on_retriever_end(
+        self,
+        documents: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,  # noqa: ARG002
+        **kwargs: Any,
+    ) -> None:
+        self._handle_retriever_end(documents, run_id, **kwargs)
+
+    def on_retriever_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,  # noqa: ARG002
+        **kwargs: Any,
+    ) -> None:
+        self._handle_retriever_error(error, run_id, **kwargs)
 
     def on_llm_start(
         self,
@@ -205,12 +237,12 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
-        tags: list[str] | None = None,  # noqa: ARG002
+        tags: list[str] | None = None,
         **kwargs: Any,
     ) -> None:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            None, lambda: self._handle_chain_start(serialized, inputs, run_id, parent_run_id, **kwargs)
+            None, lambda: self._handle_chain_start(serialized, inputs, run_id, parent_run_id, tags=tags, **kwargs)
         )
 
     async def on_chain_end(
@@ -242,10 +274,13 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,  # noqa: ARG002
+        inputs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: self._handle_tool_start(serialized, input_str, run_id, **kwargs))
+        await loop.run_in_executor(
+            None, lambda: self._handle_tool_start(serialized, input_str, run_id, inputs=inputs, **kwargs)
+        )
 
     async def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
         loop = asyncio.get_running_loop()
@@ -254,6 +289,40 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
     async def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: self._handle_tool_error(error, run_id, **kwargs))
+
+    async def on_retriever_start(
+        self,
+        serialized: dict[str, Any],
+        query: str,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,  # noqa: ARG002
+        **kwargs: Any,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self._handle_retriever_start(serialized, query, run_id, **kwargs))
+
+    async def on_retriever_end(
+        self,
+        documents: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,  # noqa: ARG002
+        **kwargs: Any,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self._handle_retriever_end(documents, run_id, **kwargs))
+
+    async def on_retriever_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,  # noqa: ARG002
+        **kwargs: Any,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self._handle_retriever_error(error, run_id, **kwargs))
 
     async def on_llm_start(
         self,

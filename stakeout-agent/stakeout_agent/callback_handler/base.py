@@ -13,6 +13,29 @@ from stakeout_agent.backends.base import AbstractMonitorDB
 _logger = logging.getLogger(__name__)
 
 
+def _extract_cache_tokens(metadata: dict) -> tuple[int | None, int | None]:
+    """Extract (cache_read_tokens, cache_creation_tokens) from LLM response metadata.
+
+    Covers OpenAI (prompt_tokens_details.cached_tokens) and Anthropic
+    (usage.cache_read_input_tokens / cache_creation_input_tokens) conventions.
+    """
+    # OpenAI: token_usage.prompt_tokens_details.cached_tokens
+    token_usage = metadata.get("token_usage") or {}
+    if token_usage:
+        details = token_usage.get("prompt_tokens_details") or {}
+        cached = details.get("cached_tokens")
+        if cached is not None:
+            return cached, None
+    # Anthropic: usage.cache_read_input_tokens + cache_creation_input_tokens
+    usage = metadata.get("usage") or {}
+    if usage:
+        cache_read = usage.get("cache_read_input_tokens")
+        cache_creation = usage.get("cache_creation_input_tokens")
+        if cache_read is not None or cache_creation is not None:
+            return cache_read, cache_creation
+    return None, None
+
+
 def _default_token_extractor(metadata: dict) -> tuple[int | None, int | None, str | None]:
     """Extract (input_tokens, output_tokens, model) from LLM response metadata.
 
@@ -60,6 +83,7 @@ class _MonitorBase:
         self._node_start_times: dict[str, float] = {}
         self._node_names: dict[str, str] = {}
         self._tool_start_times: dict[str, float] = {}
+        self._retriever_names: dict[str, str] = {}
         # Per-node token accumulation keyed by node run_id
         self._node_tokens: dict[str, dict] = {}
         # Per-node LLM prompt/response capture keyed by node run_id
@@ -68,6 +92,8 @@ class _MonitorBase:
         # Run-level token totals
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
+        self._total_cache_read_tokens: int = 0
+        self._total_cache_creation_tokens: int = 0
         # None until first successful cost estimate; avoids confusing 0.0 with "not configured"
         self._total_cost: float | None = None
         # Cumulative count of DB writes that raised an exception
@@ -94,6 +120,7 @@ class _MonitorBase:
         inputs: dict[str, Any],
         run_id: UUID,
         parent_run_id: UUID | None,
+        tags: list[str] | None = None,
         **kwargs: Any,
     ) -> None:
         run_id_str = str(run_id)
@@ -109,7 +136,12 @@ class _MonitorBase:
                 self._node_names[run_id_str] = node_name
                 current_run_id = self._run_id
             self._log.debug("node_start node=%s run_id=%s", node_name, current_run_id)
-            payload = {"inputs": self._safe_truncate(inputs)}
+            payload: dict[str, Any] = {"inputs": self._safe_truncate(inputs)}
+            metadata = kwargs.get("metadata")
+            if metadata:
+                payload["metadata"] = metadata
+            if tags:
+                payload["tags"] = tags
             messages = self._extract_messages(inputs)
             self._safe_db_write(
                 lambda: self.db.insert_event(
@@ -135,6 +167,8 @@ class _MonitorBase:
                 current_run_id = self._run_id
                 total_in = self._total_input_tokens or None
                 total_out = self._total_output_tokens or None
+                total_cr = self._total_cache_read_tokens or None
+                total_cc = self._total_cache_creation_tokens or None
                 cost = self._total_cost
                 self._clear_timing_state()
             self._log.debug("run completed run_id=%s", current_run_id)
@@ -144,6 +178,8 @@ class _MonitorBase:
                     total_input_tokens=total_in,
                     total_output_tokens=total_out,
                     estimated_cost_usd=cost,
+                    total_cache_read_tokens=total_cr,
+                    total_cache_creation_tokens=total_cc,
                 )
             )
         else:
@@ -156,6 +192,8 @@ class _MonitorBase:
                 llm_output = self._llm_outputs.pop(run_id_str, None) if self.capture_payloads else None
             input_tokens = tok.get("input") or None
             output_tokens = tok.get("output") or None
+            cache_read_tokens = tok.get("cache_read") or None
+            cache_creation_tokens = tok.get("cache_creation") or None
             model = tok.get("model")
             self._log.debug("node_end node=%s latency_ms=%s run_id=%s", node_name, latency, current_run_id)
             payload = {"outputs": self._safe_truncate(outputs)}
@@ -174,6 +212,8 @@ class _MonitorBase:
                     model=model,
                     llm_input=llm_input,
                     llm_output=llm_output,
+                    cache_read_tokens=cache_read_tokens,
+                    cache_creation_tokens=cache_creation_tokens,
                 )
             )
 
@@ -222,14 +262,15 @@ class _MonitorBase:
             self._tool_start_times[run_id_str] = time.monotonic()
             current_run_id = self._run_id
         self._log.debug("tool_call tool=%s run_id=%s", tool_name, current_run_id)
-        truncated_input = input_str[:500]
+        structured_inputs = kwargs.get("inputs")
+        raw_input = self._safe_truncate(structured_inputs) if structured_inputs is not None else input_str[:500]
         self._safe_db_write(
             lambda: self.db.insert_event(
                 run_id=current_run_id,
                 graph_id=self.graph_id,
                 event_type="tool_call",
                 node_name=tool_name,
-                payload={"input": truncated_input},
+                payload={"input": raw_input},
             )
         )
 
@@ -271,6 +312,70 @@ class _MonitorBase:
             )
         )
 
+    def _handle_retriever_start(
+        self,
+        serialized: dict[str, Any] | None,
+        query: str,
+        run_id: UUID,
+        **kwargs: Any,
+    ) -> None:
+        run_id_str = str(run_id)
+        retriever_name = serialized.get("id", ["unknown_retriever"])[-1] if serialized else "unknown_retriever"
+        with self._state_lock:
+            self._tool_start_times[run_id_str] = time.monotonic()
+            self._retriever_names[run_id_str] = retriever_name
+            current_run_id = self._run_id
+        self._log.debug("retriever_start name=%s run_id=%s", retriever_name, current_run_id)
+        self._safe_db_write(
+            lambda: self.db.insert_event(
+                run_id=current_run_id,
+                graph_id=self.graph_id,
+                event_type="retriever_start",
+                node_name=retriever_name,
+                payload={"query": query[:500]},
+            )
+        )
+
+    def _handle_retriever_end(self, documents: Any, run_id: UUID, **kwargs: Any) -> None:
+        run_id_str = str(run_id)
+        with self._state_lock:
+            latency = self._pop_latency(self._tool_start_times, run_id_str)
+            retriever_name = self._retriever_names.pop(run_id_str, "unknown_retriever")
+            current_run_id = self._run_id
+        doc_count = len(documents) if documents is not None else 0
+        self._log.debug(
+            "retriever_end name=%s docs=%d latency_ms=%s run_id=%s", retriever_name, doc_count, latency, current_run_id
+        )
+        self._safe_db_write(
+            lambda: self.db.insert_event(
+                run_id=current_run_id,
+                graph_id=self.graph_id,
+                event_type="retriever_end",
+                node_name=retriever_name,
+                latency_ms=latency,
+                payload={"document_count": doc_count},
+            )
+        )
+
+    def _handle_retriever_error(self, error: BaseException, run_id: UUID, **kwargs: Any) -> None:
+        run_id_str = str(run_id)
+        with self._state_lock:
+            latency = self._pop_latency(self._tool_start_times, run_id_str)
+            retriever_name = self._retriever_names.pop(run_id_str, "unknown_retriever")
+            current_run_id = self._run_id
+        error_str = f"{type(error).__name__}: {str(error)}"
+        self._log.warning("retriever error name=%s run_id=%s error=%s", retriever_name, current_run_id, error_str)
+        self._safe_db_write(
+            lambda: self.db.insert_event(
+                run_id=current_run_id,
+                graph_id=self.graph_id,
+                event_type="error",
+                node_name=retriever_name,
+                latency_ms=latency,
+                error=error_str,
+            )
+        )
+
     def _handle_llm_start(self, formatted_messages: list[dict], parent_run_id: UUID | None) -> None:
         """Store LLM prompt messages for the enclosing node, keyed by the node's run_id."""
         if not self.capture_payloads or parent_run_id is None:
@@ -286,9 +391,12 @@ class _MonitorBase:
     def _handle_llm_end(self, metadata: dict, parent_run_id: UUID | None, output_text: str | None = None) -> None:
         """Accumulate token counts and capture LLM output text from a completed LLM call."""
         input_tok, output_tok, model = self._token_extractor(metadata)
+        cache_read_tok, cache_creation_tok = _extract_cache_tokens(metadata)
 
         in_tok = input_tok or 0
         out_tok = output_tok or 0
+        cr_tok = cache_read_tok or 0
+        cc_tok = cache_creation_tok or 0
 
         with self._state_lock:
             if input_tok is not None or output_tok is not None:
@@ -297,11 +405,25 @@ class _MonitorBase:
 
                 if parent_run_id is not None:
                     key = str(parent_run_id)
-                    entry = self._node_tokens.setdefault(key, {"input": 0, "output": 0, "model": None})
+                    entry = self._node_tokens.setdefault(
+                        key, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None}
+                    )
                     entry["input"] += in_tok
                     entry["output"] += out_tok
                     if model:
                         entry["model"] = model
+
+            if cache_read_tok is not None or cache_creation_tok is not None:
+                self._total_cache_read_tokens += cr_tok
+                self._total_cache_creation_tokens += cc_tok
+
+                if parent_run_id is not None:
+                    key = str(parent_run_id)
+                    entry = self._node_tokens.setdefault(
+                        key, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None}
+                    )
+                    entry["cache_read"] += cr_tok
+                    entry["cache_creation"] += cc_tok
 
             if self.capture_payloads and parent_run_id is not None and output_text is not None:
                 if self._max_payload_chars is not None:
@@ -319,11 +441,14 @@ class _MonitorBase:
         self._node_start_times.clear()
         self._node_names.clear()
         self._tool_start_times.clear()
+        self._retriever_names.clear()
         self._node_tokens.clear()
         self._llm_inputs.clear()
         self._llm_outputs.clear()
         self._total_input_tokens = 0
         self._total_output_tokens = 0
+        self._total_cache_read_tokens = 0
+        self._total_cache_creation_tokens = 0
         self._total_cost = None
         self._run_id = None
 
