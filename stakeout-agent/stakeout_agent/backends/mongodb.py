@@ -19,6 +19,7 @@ except ImportError:
     class PyMongoError(Exception):  # type: ignore[no-redef]
         pass
 
+
 from stakeout_agent.backends.base import AbstractMonitorDB
 
 _log = logging.getLogger(__name__)

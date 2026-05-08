@@ -20,6 +20,7 @@ try:
         ToolUsageStartedEvent,
     )
 except ImportError:
+
     class BaseEventListener:  # type: ignore[no-redef]
         pass
 
@@ -104,8 +105,7 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
     ) -> None:
         if CrewKickoffStartedEvent is None:
             raise ImportError(
-                "crewai is required for CrewAIMonitorCallback. "
-                "Install it with: pip install 'stakeout-agent[crewai]'"
+                "crewai is required for CrewAIMonitorCallback. Install it with: pip install 'stakeout-agent[crewai]'"
             )
         _MonitorBase.__init__(
             self, crew_id, thread_id, db, capture_payloads=capture_payloads, max_payload_chars=max_payload_chars

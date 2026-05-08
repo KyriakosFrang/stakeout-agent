@@ -9,6 +9,7 @@ try:
     from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackHandler
     from langchain_core.outputs import LLMResult
 except ImportError:
+
     class BaseCallbackHandler:  # type: ignore[no-redef]
         pass
 

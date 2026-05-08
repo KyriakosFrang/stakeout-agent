@@ -7,8 +7,6 @@ from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from stakeout_agent.backends.postgres import PostgresMonitorDB
 
 
