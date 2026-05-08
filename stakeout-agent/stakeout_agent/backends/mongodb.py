@@ -4,9 +4,20 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from pymongo import DESCENDING, MongoClient
-from pymongo.collection import Collection
-from pymongo.errors import ConnectionFailure, PyMongoError
+try:
+    from pymongo import DESCENDING, MongoClient
+    from pymongo.collection import Collection
+    from pymongo.errors import ConnectionFailure, PyMongoError
+except ImportError:
+    DESCENDING = None
+    MongoClient = None
+    Collection = None
+
+    class ConnectionFailure(Exception):  # type: ignore[no-redef]
+        pass
+
+    class PyMongoError(Exception):  # type: ignore[no-redef]
+        pass
 
 from stakeout_agent.backends.base import AbstractMonitorDB
 
@@ -17,6 +28,10 @@ _RETRY_BACKOFF_BASE = 0.5  # seconds; doubles each attempt
 
 
 def _make_client():
+    if MongoClient is None:
+        raise ImportError(
+            "pymongo is required for the MongoDB backend. Install it with: pip install 'stakeout-agent[mongodb]'"
+        )
     uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
     db_name = os.getenv("MONGO_DB", "stakeout")
     client = MongoClient(
