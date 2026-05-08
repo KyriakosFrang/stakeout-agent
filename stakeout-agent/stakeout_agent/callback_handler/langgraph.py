@@ -164,17 +164,7 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,  # noqa: ARG002
     ) -> None:
-        _ROLE_MAP = {"human": "human", "ai": "assistant", "system": "system", "tool": "tool"}
-        formatted = []
-        for batch in messages:
-            for m in batch:
-                if hasattr(m, "type") and hasattr(m, "content"):
-                    role = _ROLE_MAP.get(m.type, m.type)
-                    content = m.content if isinstance(m.content, str) else str(m.content)
-                    formatted.append({"role": role, "content": content})
-                elif isinstance(m, dict) and "role" in m:
-                    formatted.append({"role": m["role"], "content": str(m.get("content", ""))})
-        self._handle_llm_start(formatted, parent_run_id)
+        self._handle_llm_start(self._format_chat_messages(messages), parent_run_id)
 
     def on_llm_end(
         self,
@@ -346,16 +336,7 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,  # noqa: ARG002
     ) -> None:
-        _ROLE_MAP = {"human": "human", "ai": "assistant", "system": "system", "tool": "tool"}
-        formatted = []
-        for batch in messages:
-            for m in batch:
-                if hasattr(m, "type") and hasattr(m, "content"):
-                    role = _ROLE_MAP.get(m.type, m.type)
-                    content = m.content if isinstance(m.content, str) else str(m.content)
-                    formatted.append({"role": role, "content": content})
-                elif isinstance(m, dict) and "role" in m:
-                    formatted.append({"role": m["role"], "content": str(m.get("content", ""))})
+        formatted = self._format_chat_messages(messages)
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: self._handle_llm_start(formatted, parent_run_id))
 

@@ -68,6 +68,9 @@ ALTER TABLE events ADD COLUMN IF NOT EXISTS cache_read_tokens           INTEGER;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS cache_creation_tokens       INTEGER;
 """
 
+_schema_initialized = False
+_schema_init_lock = threading.Lock()
+
 # Retryable psycopg2 error class names — checked by name so this module
 # stays importable even when psycopg2 is not installed.
 _RETRYABLE_PG_EXC_NAMES = frozenset({"OperationalError", "InterfaceError"})
@@ -89,8 +92,13 @@ def _make_pg_conn():
     uri = os.getenv("POSTGRES_URI") or os.getenv("DATABASE_URL", "postgresql://localhost/stakeout")
     conn = psycopg2.connect(uri, connect_timeout=5)
     conn.autocommit = True
-    with conn.cursor() as cur:
-        cur.execute(_CREATE_TABLES_SQL)
+    global _schema_initialized
+    if not _schema_initialized:
+        with _schema_init_lock:
+            if not _schema_initialized:
+                with conn.cursor() as cur:
+                    cur.execute(_CREATE_TABLES_SQL)
+                _schema_initialized = True
     _log.debug("PostgresMonitorDB connected uri=%s", uri)
     return conn
 

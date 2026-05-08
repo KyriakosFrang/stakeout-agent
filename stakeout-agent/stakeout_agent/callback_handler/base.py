@@ -12,6 +12,8 @@ from stakeout_agent.backends.base import AbstractMonitorDB
 
 _logger = logging.getLogger(__name__)
 
+_ROLE_MAP = {"human": "human", "ai": "assistant", "system": "system", "tool": "tool"}
+
 
 def _extract_cache_tokens(metadata: dict) -> tuple[int | None, int | None]:
     """Extract (cache_read_tokens, cache_creation_tokens) from LLM response metadata.
@@ -142,7 +144,7 @@ class _MonitorBase:
                 payload["metadata"] = metadata
             if tags:
                 payload["tags"] = tags
-            messages = self._extract_messages(inputs)
+            messages = self._extract_messages(inputs, max_chars=self._max_payload_chars or 500)
             self._safe_db_write(
                 lambda: self.db.insert_event(
                     run_id=current_run_id,
@@ -197,7 +199,7 @@ class _MonitorBase:
             model = tok.get("model")
             self._log.debug("node_end node=%s latency_ms=%s run_id=%s", node_name, latency, current_run_id)
             payload = {"outputs": self._safe_truncate(outputs)}
-            messages = self._extract_messages(outputs)
+            messages = self._extract_messages(outputs, max_chars=self._max_payload_chars or 500)
             self._safe_db_write(
                 lambda: self.db.insert_event(
                     run_id=current_run_id,
@@ -399,41 +401,39 @@ class _MonitorBase:
         cc_tok = cache_creation_tok or 0
 
         with self._state_lock:
+            node_entry = (
+                self._node_tokens.setdefault(
+                    str(parent_run_id),
+                    {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None},
+                )
+                if parent_run_id is not None
+                else None
+            )
+
             if input_tok is not None or output_tok is not None:
                 self._total_input_tokens += in_tok
                 self._total_output_tokens += out_tok
-
-                if parent_run_id is not None:
-                    key = str(parent_run_id)
-                    entry = self._node_tokens.setdefault(
-                        key, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None}
-                    )
-                    entry["input"] += in_tok
-                    entry["output"] += out_tok
+                if node_entry is not None:
+                    node_entry["input"] += in_tok
+                    node_entry["output"] += out_tok
                     if model:
-                        entry["model"] = model
+                        node_entry["model"] = model
 
             if cache_read_tok is not None or cache_creation_tok is not None:
                 self._total_cache_read_tokens += cr_tok
                 self._total_cache_creation_tokens += cc_tok
-
-                if parent_run_id is not None:
-                    key = str(parent_run_id)
-                    entry = self._node_tokens.setdefault(
-                        key, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None}
-                    )
-                    entry["cache_read"] += cr_tok
-                    entry["cache_creation"] += cc_tok
+                if node_entry is not None:
+                    node_entry["cache_read"] += cr_tok
+                    node_entry["cache_creation"] += cc_tok
 
             if self.capture_payloads and parent_run_id is not None and output_text is not None:
                 if self._max_payload_chars is not None:
                     output_text = output_text[: self._max_payload_chars]
                 self._llm_outputs[str(parent_run_id)] = output_text
 
-        if self._pricing is not None and (input_tok is not None or output_tok is not None):
-            cost = self._pricing.estimate_cost(model, in_tok, out_tok)
-            if cost is not None:
-                with self._state_lock:
+            if self._pricing is not None and (input_tok is not None or output_tok is not None):
+                cost = self._pricing.estimate_cost(model, in_tok, out_tok)
+                if cost is not None:
                     self._total_cost = (self._total_cost or 0.0) + cost
 
     def _clear_timing_state(self) -> None:
@@ -453,7 +453,7 @@ class _MonitorBase:
         self._run_id = None
 
     @staticmethod
-    def _extract_messages(data: Any) -> list[dict] | None:
+    def _extract_messages(data: Any, max_chars: int = 500) -> list[dict] | None:
         """Extract a messages list from a LangGraph state dict into plain {role, content} dicts.
 
         Returns None when the state has no messages field, so callers can omit the field entirely.
@@ -464,17 +464,30 @@ class _MonitorBase:
         msgs = data.get("messages")
         if not isinstance(msgs, list) or not msgs:
             return None
-        _ROLE_MAP = {"human": "human", "ai": "assistant", "system": "system", "tool": "tool"}
         result = []
         for m in msgs:
             if hasattr(m, "type") and hasattr(m, "content"):
                 # LangChain BaseMessage subclass
                 role = _ROLE_MAP.get(m.type, m.type)
                 content = m.content if isinstance(m.content, str) else str(m.content)
-                result.append({"role": role, "content": content[:500]})
+                result.append({"role": role, "content": content[:max_chars]})
             elif isinstance(m, dict) and "role" in m:
-                result.append({"role": m["role"], "content": str(m.get("content", ""))[:500]})
+                result.append({"role": m["role"], "content": str(m.get("content", ""))[:max_chars]})
         return result or None
+
+    @staticmethod
+    def _format_chat_messages(messages: list[list[Any]]) -> list[dict]:
+        """Flatten a batched chat-model messages list into plain {role, content} dicts."""
+        formatted = []
+        for batch in messages:
+            for m in batch:
+                if hasattr(m, "type") and hasattr(m, "content"):
+                    role = _ROLE_MAP.get(m.type, m.type)
+                    content = m.content if isinstance(m.content, str) else str(m.content)
+                    formatted.append({"role": role, "content": content})
+                elif isinstance(m, dict) and "role" in m:
+                    formatted.append({"role": m["role"], "content": str(m.get("content", ""))})
+        return formatted
 
     @staticmethod
     def _extract_name(serialized: dict | None, kwargs: dict) -> str:
