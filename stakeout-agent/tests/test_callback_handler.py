@@ -504,7 +504,14 @@ class TestLLMPayloadCapture:
         node_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
         cb.on_chain_start({"name": "agent"}, {}, run_id=node_id, parent_run_id=root_id)
-        llm_output = {"usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 80, "cache_creation_input_tokens": 20}}
+        llm_output = {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 80,
+                "cache_creation_input_tokens": 20,
+            }
+        }
         cb.on_llm_end(_make_llm_result("ok", llm_output), run_id=make_uuid(), parent_run_id=node_id)
         cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
         kwargs = db.insert_event.call_args_list[-1].kwargs
@@ -517,7 +524,14 @@ class TestLLMPayloadCapture:
         node_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
         cb.on_chain_start({"name": "agent"}, {}, run_id=node_id, parent_run_id=root_id)
-        llm_output = {"token_usage": {"prompt_tokens": 100, "completion_tokens": 50, "prompt_tokens_details": {"cached_tokens": 60}}, "model_name": "gpt-4o"}
+        llm_output = {
+            "token_usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "prompt_tokens_details": {"cached_tokens": 60},
+            },
+            "model_name": "gpt-4o",
+        }
         cb.on_llm_end(_make_llm_result("ok", llm_output), run_id=make_uuid(), parent_run_id=node_id)
         cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
         kwargs = db.insert_event.call_args_list[-1].kwargs
@@ -530,7 +544,14 @@ class TestLLMPayloadCapture:
         node_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
         cb.on_chain_start({"name": "agent"}, {}, run_id=node_id, parent_run_id=root_id)
-        llm_output = {"usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 80, "cache_creation_input_tokens": 20}}
+        llm_output = {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 80,
+                "cache_creation_input_tokens": 20,
+            }
+        }
         cb.on_llm_end(_make_llm_result("ok", llm_output), run_id=make_uuid(), parent_run_id=node_id)
         cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
         cb.on_chain_end({}, run_id=root_id, parent_run_id=None)
@@ -554,7 +575,14 @@ class TestLLMPayloadCapture:
 
 class TestExtractCacheTokens:
     def test_anthropic_both_fields(self):
-        meta = {"usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 80, "cache_creation_input_tokens": 20}}
+        meta = {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 80,
+                "cache_creation_input_tokens": 20,
+            }
+        }
         assert _extract_cache_tokens(meta) == (80, 20)
 
     def test_anthropic_read_only(self):
@@ -564,7 +592,13 @@ class TestExtractCacheTokens:
         assert cc is None
 
     def test_openai_cached_tokens(self):
-        meta = {"token_usage": {"prompt_tokens": 100, "completion_tokens": 50, "prompt_tokens_details": {"cached_tokens": 60}}}
+        meta = {
+            "token_usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "prompt_tokens_details": {"cached_tokens": 60},
+            }
+        }
         assert _extract_cache_tokens(meta) == (60, None)
 
     def test_no_cache_fields(self):

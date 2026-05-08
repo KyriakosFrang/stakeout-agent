@@ -320,7 +320,7 @@ class _MonitorBase:
         **kwargs: Any,
     ) -> None:
         run_id_str = str(run_id)
-        retriever_name = (serialized.get("id", ["unknown_retriever"])[-1] if serialized else "unknown_retriever")
+        retriever_name = serialized.get("id", ["unknown_retriever"])[-1] if serialized else "unknown_retriever"
         with self._state_lock:
             self._tool_start_times[run_id_str] = time.monotonic()
             self._retriever_names[run_id_str] = retriever_name
@@ -343,7 +343,9 @@ class _MonitorBase:
             retriever_name = self._retriever_names.pop(run_id_str, "unknown_retriever")
             current_run_id = self._run_id
         doc_count = len(documents) if documents is not None else 0
-        self._log.debug("retriever_end name=%s docs=%d latency_ms=%s run_id=%s", retriever_name, doc_count, latency, current_run_id)
+        self._log.debug(
+            "retriever_end name=%s docs=%d latency_ms=%s run_id=%s", retriever_name, doc_count, latency, current_run_id
+        )
         self._safe_db_write(
             lambda: self.db.insert_event(
                 run_id=current_run_id,
@@ -403,7 +405,9 @@ class _MonitorBase:
 
                 if parent_run_id is not None:
                     key = str(parent_run_id)
-                    entry = self._node_tokens.setdefault(key, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None})
+                    entry = self._node_tokens.setdefault(
+                        key, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None}
+                    )
                     entry["input"] += in_tok
                     entry["output"] += out_tok
                     if model:
@@ -415,7 +419,9 @@ class _MonitorBase:
 
                 if parent_run_id is not None:
                     key = str(parent_run_id)
-                    entry = self._node_tokens.setdefault(key, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None})
+                    entry = self._node_tokens.setdefault(
+                        key, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None}
+                    )
                     entry["cache_read"] += cr_tok
                     entry["cache_creation"] += cc_tok
 
