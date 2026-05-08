@@ -109,7 +109,10 @@ class _MonitorBase:
                 self._node_names[run_id_str] = node_name
                 current_run_id = self._run_id
             self._log.debug("node_start node=%s run_id=%s", node_name, current_run_id)
-            payload = {"inputs": self._safe_truncate(inputs)}
+            payload: dict[str, Any] = {"inputs": self._safe_truncate(inputs)}
+            metadata = kwargs.get("metadata")
+            if metadata:
+                payload["metadata"] = metadata
             messages = self._extract_messages(inputs)
             self._safe_db_write(
                 lambda: self.db.insert_event(
@@ -222,14 +225,15 @@ class _MonitorBase:
             self._tool_start_times[run_id_str] = time.monotonic()
             current_run_id = self._run_id
         self._log.debug("tool_call tool=%s run_id=%s", tool_name, current_run_id)
-        truncated_input = input_str[:500]
+        structured_inputs = kwargs.get("inputs")
+        raw_input = self._safe_truncate(structured_inputs) if structured_inputs is not None else input_str[:500]
         self._safe_db_write(
             lambda: self.db.insert_event(
                 run_id=current_run_id,
                 graph_id=self.graph_id,
                 event_type="tool_call",
                 node_name=tool_name,
-                payload={"input": truncated_input},
+                payload={"input": raw_input},
             )
         )
 

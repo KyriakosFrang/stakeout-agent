@@ -101,9 +101,10 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,  # noqa: ARG002
+        inputs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        self._handle_tool_start(serialized, input_str, run_id, **kwargs)
+        self._handle_tool_start(serialized, input_str, run_id, inputs=inputs, **kwargs)
 
     def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
         self._handle_tool_end(output, run_id, **kwargs)
@@ -242,10 +243,13 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,  # noqa: ARG002
+        inputs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: self._handle_tool_start(serialized, input_str, run_id, **kwargs))
+        await loop.run_in_executor(
+            None, lambda: self._handle_tool_start(serialized, input_str, run_id, inputs=inputs, **kwargs)
+        )
 
     async def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
         loop = asyncio.get_running_loop()
