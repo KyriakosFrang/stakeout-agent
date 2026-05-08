@@ -44,4 +44,4 @@ jobs:
         run: uv run ruff format .      
 
       - name: Run tests
-        run: uv run --with pytest --with "crewai>=0.80"  pytest
+        run: uv run --with pytest --extra langgraph --extra mongodb --extra postgres --extra crewai pytest
