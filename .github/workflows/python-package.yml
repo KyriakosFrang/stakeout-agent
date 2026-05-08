@@ -45,7 +45,7 @@ jobs:
 
       - name: Run tests (Python 3.10, crewai excluded)
         if: matrix.python-version == '3.10'
-        run: uv run --with pytest --extra langgraph --extra mongodb --extra postgres pytest
+        run: uv run --with pytest --extra langgraph --extra mongodb --extra postgres pytest --ignore tests/test_crewai.py
 
       - name: Run tests
         if: matrix.python-version != '3.10'
