@@ -44,4 +44,9 @@ jobs:
         run: uv run ruff format .      
 
       - name: Run tests
-        run: uv run --with pytest --extra langgraph --extra mongodb --extra postgres --extra crewai pytest
+        run: |
+          if [[ "${{ matrix.python-version }}" == "3.10" ]]; then
+            uv run --with pytest --extra langgraph --extra mongodb --extra postgres pytest
+          else
+            uv run --with pytest --extra langgraph --extra mongodb --extra postgres --extra crewai pytest
+          fi
