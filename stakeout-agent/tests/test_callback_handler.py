@@ -37,6 +37,10 @@ class TestExtractName:
     def test_unknown_when_nothing_available(self):
         assert _MonitorBase._extract_name(None, {}) == "unknown"
 
+    def test_empty_id_list_falls_back_to_unknown(self):
+        # Regression: empty "id" list previously raised IndexError on [-1].
+        assert _MonitorBase._extract_name({"id": []}, {}) == "unknown"
+
 
 class TestPopLatency:
     def test_returns_positive_milliseconds(self):

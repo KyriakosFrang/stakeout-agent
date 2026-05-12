@@ -479,7 +479,8 @@ class _MonitorBase:
     @staticmethod
     def _extract_name(serialized: dict | None, kwargs: dict) -> str:
         if serialized:
-            return serialized.get("name") or serialized.get("id", ["unknown"])[-1] or kwargs.get("name", "unknown")
+            ids = serialized.get("id") or ["unknown"]
+            return serialized.get("name") or ids[-1] or kwargs.get("name", "unknown")
         return kwargs.get("name", "unknown")
 
     @staticmethod
