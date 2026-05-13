@@ -50,6 +50,10 @@ langgraph = ["langchain-core>=0.3", "langgraph>=1.1.9"]
 mongodb = ["pymongo>=4.0"]
 postgres = ["psycopg2-binary>=2.9"]
 crewai = ["crewai>=0.80"]
+otel = [
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["stakeout_agent"]
@@ -72,6 +76,9 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "integration: requires real backend services — run `docker compose up -d mongo postgres jaeger`",
+]
 
 [tool.ruff]
 exclude = [

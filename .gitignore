@@ -221,6 +221,5 @@ __marimo__/
 /api
 /collector
 /dashboard
-docker-compose.yml
 
 CLAUDE.md
