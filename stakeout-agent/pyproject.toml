@@ -76,6 +76,9 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "integration: requires real backend services — run `docker compose up -d mongo postgres jaeger`",
+]
 
 [tool.ruff]
 exclude = [

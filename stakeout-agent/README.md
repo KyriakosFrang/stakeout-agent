@@ -576,6 +576,73 @@ ORDER BY e.timestamp ASC;
 The [stakeout-dashboard](https://github.com/KyriakosFrang/stakeout-dashboard) **Thread Deep Dive** view does exactly this — select any `thread_id` and see every run and every step in chronological order.
 
 
+## Integration tests
+
+Integration tests run against real backend services and are kept separate from the unit test suite so CI stays fast and dependency-free. Unit tests (mocks only) always run. Integration tests require Docker and are run locally or in a dedicated CI job.
+
+### Test layout
+
+| Path | Needs Docker | What it covers |
+|---|---|---|
+| `tests/` | No | All unit tests — mocked at the driver boundary |
+| `tests/integration/test_mongo_integration.py` | `mongo` | Full CRUD lifecycle against a real MongoDB instance |
+| `tests/integration/test_postgres_integration.py` | `postgres` | Full CRUD lifecycle against a real PostgreSQL instance |
+| `tests/integration/test_otel_inprocess.py` | No | OTEL backend with `InMemorySpanExporter` — span tree, attributes, events, error paths |
+
+The OTEL in-process tests use the SDK's `InMemorySpanExporter` and run without any container. MongoDB and Postgres tests auto-skip when the container isn't reachable, so a plain `pytest` never fails due to a missing service.
+
+### Start the backends
+
+```bash
+# from the repo root
+docker compose up -d
+```
+
+Wait for the healthchecks to pass (about 10–15 seconds), then confirm all three are healthy:
+
+```bash
+docker compose ps
+```
+
+| Service | Port | Notes |
+|---|---|---|
+| `stakeout-mongo` | `27017` | MongoDB 7 |
+| `stakeout-postgres` | `5432` | PostgreSQL 16 — user/pass/db: `stakeout` |
+| `stakeout-jaeger` | `4317` (OTLP gRPC), `16686` (UI) | Jaeger all-in-one |
+
+### Run integration tests
+
+```bash
+cd stakeout-agent
+
+# All backends at once
+uv run --with pytest --extra langgraph --extra mongodb --extra postgres --extra crewai --extra otel pytest tests/integration -v
+
+# One backend at a time
+uv run --with pytest --extra mongodb pytest tests/integration/test_mongo_integration.py -v
+uv run --with pytest --extra postgres pytest tests/integration/test_postgres_integration.py -v
+uv run --with pytest --extra otel    pytest tests/integration/test_otel_inprocess.py -v
+```
+
+### Run only unit tests (no Docker)
+
+```bash
+cd stakeout-agent
+uv run --with pytest --extra langgraph --extra mongodb --extra postgres --extra crewai --extra otel pytest --ignore tests/integration
+```
+
+### View OTEL traces in Jaeger
+
+After running any code that uses `OTELMonitorDB` with `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317`, open the Jaeger UI to browse traces:
+
+```
+http://localhost:16686
+```
+
+Select the `stakeout-agent` service (or whatever `OTEL_SERVICE_NAME` is set to) and explore the run timeline, node spans, tool calls, and token attributes.
+
+---
+
 ## Roadmap
 
 - [x] Sync LangGraph callback support
