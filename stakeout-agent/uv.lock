@@ -3901,6 +3901,10 @@ langgraph = [
 mongodb = [
     { name = "pymongo" },
 ]
+otel = [
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-sdk" },
+]
 postgres = [
     { name = "psycopg2-binary" },
 ]
@@ -3917,10 +3921,12 @@ requires-dist = [
     { name = "crewai", marker = "extra == 'crewai'", specifier = ">=0.80" },
     { name = "langchain-core", marker = "extra == 'langgraph'", specifier = ">=0.3" },
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.1.9" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc", marker = "extra == 'otel'", specifier = ">=1.20" },
+    { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20" },
     { name = "psycopg2-binary", marker = "extra == 'postgres'", specifier = ">=2.9" },
     { name = "pymongo", marker = "extra == 'mongodb'", specifier = ">=4.0" },
 ]
-provides-extras = ["langgraph", "mongodb", "postgres", "crewai"]
+provides-extras = ["langgraph", "mongodb", "postgres", "crewai", "otel"]
 
 [package.metadata.requires-dev]
 dev = [

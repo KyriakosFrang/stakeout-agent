@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-   One callback. Every run, node, tool call, token count, prompt, and response — captured automatically into MongoDB or PostgreSQL. No changes to your agent code.
+   One callback. Every run, node, tool call, token count, prompt, and response — captured automatically into MongoDB, PostgreSQL, or any OpenTelemetry-compatible collector. No changes to your agent code.
 </p>
 
 <p align="center">
@@ -43,11 +43,17 @@ pip install 'stakeout-agent[langgraph,mongodb]'
 # LangGraph + PostgreSQL
 pip install 'stakeout-agent[langgraph,postgres]'
 
+# LangGraph + OpenTelemetry (Jaeger, Datadog, Grafana Tempo, Honeycomb, …)
+pip install 'stakeout-agent[langgraph,otel]'
+
 # CrewAI + MongoDB
 pip install 'stakeout-agent[crewai,mongodb]'
 
 # CrewAI + PostgreSQL
 pip install 'stakeout-agent[crewai,postgres]'
+
+# CrewAI + OpenTelemetry
+pip install 'stakeout-agent[crewai,otel]'
 ```
 
 ```python
@@ -67,8 +73,10 @@ graph LR
     A[Your LangGraph / CrewAI app] -->|callback| B[stakeout-agent]
     B --> C[(MongoDB)]
     B --> D[(PostgreSQL)]
+    B --> F[OTEL Collector]
     C --> E[Dashboard / your queries]
     D --> E
+    F --> G[Jaeger / Datadog / Grafana / Honeycomb]
 ```
 
 stakeout-agent hooks into your framework's event system. It records a `run` document for each invocation and an `event` document for every node start/end, tool call, tool result, and error — with latency, token usage, and the actual prompts and responses captured at every step.
@@ -86,7 +94,7 @@ stakeout-agent hooks into your framework's event system. It records a `run` docu
 | Cost estimation | **Yes** — opt-in, configurable per model |
 | Prompt & response capture | **Yes** — per node, opt-out, truncation supported |
 | Frameworks | **LangGraph + CrewAI** |
-| Backends | **MongoDB + PostgreSQL** |
+| Backends | **MongoDB + PostgreSQL + OpenTelemetry** |
 | Dashboard included | **Yes** — [dedicated real-time observability UI](https://github.com/KyriakosFrang/stakeout-dashboard) |
 
 ---
@@ -102,11 +110,17 @@ pip install 'stakeout-agent[langgraph,mongodb]'
 # LangGraph + PostgreSQL
 pip install 'stakeout-agent[langgraph,postgres]'
 
+# LangGraph + OpenTelemetry (Jaeger, Datadog, Grafana Tempo, Honeycomb, …)
+pip install 'stakeout-agent[langgraph,otel]'
+
 # CrewAI + MongoDB
 pip install 'stakeout-agent[crewai,mongodb]'
 
 # CrewAI + PostgreSQL
 pip install 'stakeout-agent[crewai,postgres]'
+
+# CrewAI + OpenTelemetry
+pip install 'stakeout-agent[crewai,otel]'
 ```
 
 | Extra | Installs | Use when |
@@ -115,6 +129,7 @@ pip install 'stakeout-agent[crewai,postgres]'
 | `crewai` | `crewai` | Using CrewAI |
 | `mongodb` | `pymongo` | Storing to MongoDB |
 | `postgres` | `psycopg2-binary` | Storing to PostgreSQL |
+| `otel` | `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc` | Exporting to any OTEL-compatible collector |
 
 Requires Python 3.10+.
 
@@ -351,6 +366,9 @@ Each example runs a two-agent crew (Researcher + Writer) with a `MultiplyTool`, 
 | `MONGO_URI` | `mongodb://localhost:27017` | MongoDB connection string |
 | `MONGO_DB` | `stakeout` | MongoDB database name |
 | `POSTGRES_URI` | `postgresql://localhost/stakeout` | PostgreSQL connection string (also reads `DATABASE_URL`) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP collector endpoint; triggers auto-configure when set |
+| `OTEL_EXPORTER_OTLP_HEADERS` | — | Headers for the OTLP exporter (e.g. auth tokens) |
+| `OTEL_SERVICE_NAME` | `stakeout-agent` | Service name attached to all spans |
 
 ### PostgreSQL
 
@@ -377,6 +395,63 @@ monitor = LangGraphMonitorCallback(
     db=PostgresMonitorDB(),
 )
 ```
+
+### OpenTelemetry
+
+Export every run and node as an OTEL trace to any compatible collector — Jaeger, Datadog, Grafana Tempo, Honeycomb, and others — without changing your agent code.
+
+```bash
+pip install 'stakeout-agent[langgraph,otel]'
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export OTEL_SERVICE_NAME=my-agent-service   # optional, defaults to "stakeout-agent"
+```
+
+```python
+from stakeout_agent import LangGraphMonitorCallback
+from stakeout_agent.backends.otel import OTELMonitorDB
+
+monitor = LangGraphMonitorCallback(
+    graph_id="my_graph",
+    thread_id="thread_123",
+    db=OTELMonitorDB(),  # reads OTEL_EXPORTER_OTLP_ENDPOINT automatically
+)
+result = graph.invoke(inputs, config={"callbacks": [monitor]})
+```
+
+`OTELMonitorDB` honours the standard OTEL environment variables (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME`) so it drops into any existing OTEL setup with zero custom config.
+
+For teams with a programmatic OTEL setup, inject your own `TracerProvider`:
+
+```python
+from stakeout_agent.backends.otel import OTELMonitorDB
+
+monitor = LangGraphMonitorCallback(
+    graph_id="my_graph",
+    thread_id="thread_123",
+    db=OTELMonitorDB(tracer_provider=my_provider),
+)
+```
+
+If neither `OTEL_EXPORTER_OTLP_ENDPOINT` nor an explicit provider is given, `OTELMonitorDB` falls back to the global OTEL tracer provider configured elsewhere in your application.
+
+#### Span structure
+
+Each invocation produces a trace following [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/):
+
+| stakeout concept | OTEL span |
+|---|---|
+| `run` | Root span — name is `graph_id` |
+| `node_start` / `node_end` | Child span per node — name is the node name |
+| `tool_call` / `tool_result` | Child span per tool call — name is the tool name |
+| `retriever_start` / `retriever_end` | Child span per retriever call |
+| `error` | `StatusCode.ERROR` + recorded exception on the relevant span |
+| `latency_ms` | `stakeout.latency_ms` attribute (span duration also captures wall time) |
+| `model` | `gen_ai.request.model` |
+| `input_tokens` / `output_tokens` | `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` |
+| `cache_read_tokens` / `cache_creation_tokens` | `gen_ai.usage.cache_read_input_tokens` / `gen_ai.usage.cache_creation_input_tokens` |
+| `estimated_cost_usd` | `stakeout.cost_usd` |
+| `llm_input` / `llm_output` | Span events `gen_ai.content.prompt` / `gen_ai.content.completion` (not attributes, to avoid collector size limits) |
+| `thread_id`, `graph_id`, `run_id` | `stakeout.thread_id`, `stakeout.graph_id`, `stakeout.run_id` on root span |
 
 ---
 
@@ -509,13 +584,14 @@ The [stakeout-dashboard](https://github.com/KyriakosFrang/stakeout-dashboard) **
 - [x] Async CrewAI callback support
 - [x] MongoDB persistence
 - [x] PostgreSQL persistence
+- [x] OpenTelemetry export (`OTELMonitorDB` — Jaeger, Datadog, Grafana Tempo, Honeycomb, …)
 - [x] Run and event collections
 - [x] Token usage tracking (per node and per run)
 - [x] Cost estimation with configurable pricing map
 - [x] Prompt and response capture per node (`capture_payloads`, `max_payload_chars`)
 - [x] [Dedicated UI dashboard](https://github.com/KyriakosFrang/stakeout-dashboard) (Run History, Node Performance, Run Inspector, Thread Deep Dive)
 - [ ] Additional agentic frameworks (PydanticAI, SemanticKernel, AutoGen etc.)
-- [ ] Additional storage backends (SQLite, Redis, ...)
+- [ ] Additional storage backends (SQLite, Redis, …)
 
 ## License
 
