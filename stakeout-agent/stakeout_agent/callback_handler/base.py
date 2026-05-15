@@ -115,6 +115,30 @@ class _MonitorBase:
         with self._state_lock:
             return self._dropped_events
 
+    @property
+    def _total_input_tokens(self) -> int:
+        with self._state_lock:
+            return sum(ctx.total_input_tokens for ctx in self._active_runs.values())
+
+    @property
+    def _total_output_tokens(self) -> int:
+        with self._state_lock:
+            return sum(ctx.total_output_tokens for ctx in self._active_runs.values())
+
+    @property
+    def _total_cost(self) -> float | None:
+        with self._state_lock:
+            costs = [ctx.total_cost for ctx in self._active_runs.values() if ctx.total_cost is not None]
+        return sum(costs) if costs else None
+
+    @property
+    def _node_tokens(self) -> dict:
+        with self._state_lock:
+            merged: dict = {}
+            for ctx in self._active_runs.values():
+                merged.update(ctx.node_tokens)
+            return merged
+
     def _safe_db_write(self, fn: Callable[[], Any]) -> None:
         try:
             fn()
