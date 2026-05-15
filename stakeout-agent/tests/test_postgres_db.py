@@ -293,16 +293,53 @@ class TestTableCreation:
             conn = pg._connection
         assert conn is mock_conn
 
-    def test_sql_contains_required_tables(self):
-        from stakeout_agent.backends.postgres import _CREATE_TABLES_SQL
+    def test_migration_chain_is_complete(self):
+        import importlib
+        import os
 
-        assert "CREATE TABLE IF NOT EXISTS runs" in _CREATE_TABLES_SQL
-        assert "CREATE TABLE IF NOT EXISTS events" in _CREATE_TABLES_SQL
-        assert "idx_runs_started_at" in _CREATE_TABLES_SQL
-        assert "idx_runs_graph_id" in _CREATE_TABLES_SQL
-        assert "idx_runs_status" in _CREATE_TABLES_SQL
-        assert "idx_events_run_id" in _CREATE_TABLES_SQL
-        assert "idx_events_timestamp" in _CREATE_TABLES_SQL
+        versions_dir = os.path.join(
+            os.path.dirname(__file__),
+            "../stakeout_agent/backends/migrations/versions",
+        )
+        version_files = sorted(f for f in os.listdir(versions_dir) if f.endswith(".py") and f != "__init__.py")
+        assert len(version_files) >= 3, "Expected at least 3 migration versions"
+
+        revisions = {}
+        for fname in version_files:
+            mod_path = f"stakeout_agent.backends.migrations.versions.{fname[:-3]}"
+            mod = importlib.import_module(mod_path)
+            revisions[mod.revision] = mod.down_revision
+
+        # Exactly one root (down_revision is None)
+        roots = [r for r, parent in revisions.items() if parent is None]
+        assert len(roots) == 1, f"Expected one root migration, found: {roots}"
+
+        # Every non-root references a known revision
+        for rev, parent in revisions.items():
+            if parent is not None:
+                assert parent in revisions, f"Migration {rev} references unknown parent {parent}"
+
+        # The initial migration creates both tables and all five indexes
+        root_mod_name = next(
+            f[:-3]
+            for f in version_files
+            if importlib.import_module(f"stakeout_agent.backends.migrations.versions.{f[:-3]}").revision == roots[0]
+        )
+        import inspect
+
+        root_src = inspect.getsource(
+            importlib.import_module(f"stakeout_agent.backends.migrations.versions.{root_mod_name}")
+        )
+        for expected in (
+            "runs",
+            "events",
+            "idx_runs_started_at",
+            "idx_runs_graph_id",
+            "idx_runs_status",
+            "idx_events_run_id",
+            "idx_events_timestamp",
+        ):
+            assert expected in root_src, f"Initial migration missing: {expected}"
 
 
 # ---------------------------------------------------------------------------

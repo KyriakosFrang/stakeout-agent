@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import threading
@@ -52,6 +53,25 @@ def _default_token_extractor(metadata: dict) -> tuple[int | None, int | None, st
     return None, None, None
 
 
+@dataclasses.dataclass
+class _RunContext:
+    """Holds all mutable state for a single graph invocation."""
+
+    run_id: str
+    node_start_times: dict[str, float] = dataclasses.field(default_factory=dict)
+    node_names: dict[str, str] = dataclasses.field(default_factory=dict)
+    tool_start_times: dict[str, float] = dataclasses.field(default_factory=dict)
+    retriever_names: dict[str, str] = dataclasses.field(default_factory=dict)
+    node_tokens: dict[str, dict] = dataclasses.field(default_factory=dict)
+    llm_inputs: dict[str, list] = dataclasses.field(default_factory=dict)
+    llm_outputs: dict[str, str] = dataclasses.field(default_factory=dict)
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    total_cache_creation_tokens: int = 0
+    total_cost: float | None = None
+
+
 class _MonitorBase:
     """Shared state and logic reused by all framework-specific callback handlers."""
 
@@ -64,6 +84,8 @@ class _MonitorBase:
         token_extractor: Callable[[dict], tuple[int | None, int | None, str | None]] | None = None,
         capture_payloads: bool = True,
         max_payload_chars: int | None = None,
+        parent_run_id: str | None = None,
+        prompt_version: str | None = None,
     ):
         self.graph_id = graph_id
         self.thread_id = thread_id
@@ -76,27 +98,15 @@ class _MonitorBase:
         self._token_extractor = token_extractor or _default_token_extractor
         self.capture_payloads = capture_payloads
         self._max_payload_chars = max_payload_chars
+        self.parent_run_id = parent_run_id
+        self.prompt_version = prompt_version
         self._log = logging.LoggerAdapter(_logger, {"graph_id": graph_id, "thread_id": thread_id})
 
         self._state_lock = threading.Lock()
-        self._run_id: str | None = None
-        self._node_start_times: dict[str, float] = {}
-        self._node_names: dict[str, str] = {}
-        self._tool_start_times: dict[str, float] = {}
-        self._retriever_names: dict[str, str] = {}
-        # Per-node token accumulation keyed by node run_id
-        self._node_tokens: dict[str, dict] = {}
-        # Per-node LLM prompt/response capture keyed by node run_id
-        self._llm_inputs: dict[str, list[dict]] = {}
-        self._llm_outputs: dict[str, str] = {}
-        # Run-level token totals
-        self._total_input_tokens: int = 0
-        self._total_output_tokens: int = 0
-        self._total_cache_read_tokens: int = 0
-        self._total_cache_creation_tokens: int = 0
-        # None until first successful cost estimate; avoids confusing 0.0 with "not configured"
-        self._total_cost: float | None = None
-        # Cumulative count of DB writes that raised an exception
+        # root run_id str -> _RunContext; one entry per concurrent invocation
+        self._active_runs: dict[str, _RunContext] = {}
+        # any child event run_id str -> root run_id str, for routing child events to the right context
+        self._run_id_to_root: dict[str, str] = {}
         self._dropped_events: int = 0
 
     @property
@@ -104,6 +114,30 @@ class _MonitorBase:
         """Number of DB writes that failed since this monitor was created."""
         with self._state_lock:
             return self._dropped_events
+
+    @property
+    def _total_input_tokens(self) -> int:
+        with self._state_lock:
+            return sum(ctx.total_input_tokens for ctx in self._active_runs.values())
+
+    @property
+    def _total_output_tokens(self) -> int:
+        with self._state_lock:
+            return sum(ctx.total_output_tokens for ctx in self._active_runs.values())
+
+    @property
+    def _total_cost(self) -> float | None:
+        with self._state_lock:
+            costs = [ctx.total_cost for ctx in self._active_runs.values() if ctx.total_cost is not None]
+        return sum(costs) if costs else None
+
+    @property
+    def _node_tokens(self) -> dict:
+        with self._state_lock:
+            merged: dict = {}
+            for ctx in self._active_runs.values():
+                merged.update(ctx.node_tokens)
+            return merged
 
     def _safe_db_write(self, fn: Callable[[], Any]) -> None:
         try:
@@ -125,16 +159,35 @@ class _MonitorBase:
     ) -> None:
         run_id_str = str(run_id)
         if parent_run_id is None:
+            ctx = _RunContext(run_id=run_id_str)
             with self._state_lock:
-                self._run_id = run_id_str
+                self._active_runs[run_id_str] = ctx
+                self._run_id_to_root[run_id_str] = run_id_str
             self._log.debug("run started run_id=%s", run_id_str)
-            self._safe_db_write(lambda: self.db.create_run(run_id_str, self.graph_id, self.thread_id))
+            run_inputs = self._safe_truncate(inputs, self._max_payload_chars or 5000) if self.capture_payloads else None
+            _parent = self.parent_run_id
+            _version = self.prompt_version
+            self._safe_db_write(
+                lambda: self.db.create_run(
+                    run_id_str,
+                    self.graph_id,
+                    self.thread_id,
+                    run_inputs=run_inputs,
+                    parent_run_id=_parent,
+                    prompt_version=_version,
+                )
+            )
         else:
+            parent_run_id_str = str(parent_run_id)
             node_name = self._extract_name(serialized, kwargs)
             with self._state_lock:
-                self._node_start_times[run_id_str] = time.monotonic()
-                self._node_names[run_id_str] = node_name
-                current_run_id = self._run_id
+                root_id = self._run_id_to_root.get(parent_run_id_str)
+                self._run_id_to_root[run_id_str] = root_id
+                ctx = self._active_runs.get(root_id) if root_id else None
+                if ctx:
+                    ctx.node_start_times[run_id_str] = time.monotonic()
+                    ctx.node_names[run_id_str] = node_name
+            current_run_id = root_id
             self._log.debug("node_start node=%s run_id=%s", node_name, current_run_id)
             payload: dict[str, Any] = {"inputs": self._safe_truncate(inputs)}
             metadata = kwargs.get("metadata")
@@ -164,17 +217,20 @@ class _MonitorBase:
         run_id_str = str(run_id)
         if parent_run_id is None:
             with self._state_lock:
-                current_run_id = self._run_id
-                total_in = self._total_input_tokens or None
-                total_out = self._total_output_tokens or None
-                total_cr = self._total_cache_read_tokens or None
-                total_cc = self._total_cache_creation_tokens or None
-                cost = self._total_cost
-                self._clear_timing_state()
-            self._log.debug("run completed run_id=%s", current_run_id)
+                ctx = self._active_runs.pop(run_id_str, None)
+                self._run_id_to_root.pop(run_id_str, None)
+            if ctx:
+                total_in = ctx.total_input_tokens or None
+                total_out = ctx.total_output_tokens or None
+                total_cr = ctx.total_cache_read_tokens or None
+                total_cc = ctx.total_cache_creation_tokens or None
+                cost = ctx.total_cost
+            else:
+                total_in = total_out = total_cr = total_cc = cost = None
+            self._log.debug("run completed run_id=%s", run_id_str)
             self._safe_db_write(
                 lambda: self.db.complete_run(
-                    current_run_id,
+                    run_id_str,
                     total_input_tokens=total_in,
                     total_output_tokens=total_out,
                     estimated_cost_usd=cost,
@@ -184,17 +240,25 @@ class _MonitorBase:
             )
         else:
             with self._state_lock:
-                latency = self._pop_latency(self._node_start_times, run_id_str)
-                node_name = self._node_names.pop(run_id_str, "unknown")
-                current_run_id = self._run_id
-                tok = self._node_tokens.pop(run_id_str, {})
-                llm_input = self._llm_inputs.pop(run_id_str, None) if self.capture_payloads else None
-                llm_output = self._llm_outputs.pop(run_id_str, None) if self.capture_payloads else None
+                root_id = self._run_id_to_root.pop(run_id_str, None)
+                ctx = self._active_runs.get(root_id) if root_id else None
+                if ctx:
+                    latency = self._pop_latency(ctx.node_start_times, run_id_str)
+                    node_name = ctx.node_names.pop(run_id_str, "unknown")
+                    tok = ctx.node_tokens.pop(run_id_str, {})
+                    llm_input = ctx.llm_inputs.pop(run_id_str, None) if self.capture_payloads else None
+                    llm_output = ctx.llm_outputs.pop(run_id_str, None) if self.capture_payloads else None
+                else:
+                    latency = None
+                    node_name = "unknown"
+                    tok = {}
+                    llm_input = llm_output = None
             input_tokens = tok.get("input") or None
             output_tokens = tok.get("output") or None
             cache_read_tokens = tok.get("cache_read") or None
             cache_creation_tokens = tok.get("cache_creation") or None
             model = tok.get("model")
+            current_run_id = root_id
             self._log.debug("node_end node=%s latency_ms=%s run_id=%s", node_name, latency, current_run_id)
             payload = {"outputs": self._safe_truncate(outputs)}
             messages = self._extract_messages(outputs)
@@ -228,15 +292,21 @@ class _MonitorBase:
         error_str = f"{type(error).__name__}: {str(error)}"
         if parent_run_id is None:
             with self._state_lock:
-                current_run_id = self._run_id
-                self._clear_timing_state()
-            self._log.warning("run failed run_id=%s error=%s", current_run_id, error_str)
-            self._safe_db_write(lambda: self.db.fail_run(current_run_id, error_str))
+                self._active_runs.pop(run_id_str, None)
+                self._run_id_to_root.pop(run_id_str, None)
+            self._log.warning("run failed run_id=%s error=%s", run_id_str, error_str)
+            self._safe_db_write(lambda: self.db.fail_run(run_id_str, error_str))
         else:
             with self._state_lock:
-                latency = self._pop_latency(self._node_start_times, run_id_str)
-                node_name = self._node_names.pop(run_id_str, "unknown")
-                current_run_id = self._run_id
+                root_id = self._run_id_to_root.pop(run_id_str, None)
+                ctx = self._active_runs.get(root_id) if root_id else None
+                if ctx:
+                    latency = self._pop_latency(ctx.node_start_times, run_id_str)
+                    node_name = ctx.node_names.pop(run_id_str, "unknown")
+                else:
+                    latency = None
+                    node_name = "unknown"
+            current_run_id = root_id
             self._log.warning("node error node=%s run_id=%s error=%s", node_name, current_run_id, error_str)
             self._safe_db_write(
                 lambda: self.db.insert_event(
@@ -254,13 +324,19 @@ class _MonitorBase:
         serialized: dict[str, Any] | None,
         input_str: str,
         run_id: UUID,
+        parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
         run_id_str = str(run_id)
+        parent_run_id_str = str(parent_run_id) if parent_run_id else None
         tool_name = serialized.get("name", "unknown_tool") if serialized else kwargs.get("name", "unknown_tool")
         with self._state_lock:
-            self._tool_start_times[run_id_str] = time.monotonic()
-            current_run_id = self._run_id
+            root_id = self._run_id_to_root.get(parent_run_id_str) if parent_run_id_str else None
+            self._run_id_to_root[run_id_str] = root_id
+            ctx = self._active_runs.get(root_id) if root_id else None
+            if ctx:
+                ctx.tool_start_times[run_id_str] = time.monotonic()
+            current_run_id = root_id
         self._log.debug("tool_call tool=%s run_id=%s", tool_name, current_run_id)
         structured_inputs = kwargs.get("inputs")
         raw_input = self._safe_truncate(structured_inputs) if structured_inputs is not None else input_str[:500]
@@ -278,8 +354,10 @@ class _MonitorBase:
         run_id_str = str(run_id)
         tool_name = kwargs.get("name", "unknown_tool")
         with self._state_lock:
-            latency = self._pop_latency(self._tool_start_times, run_id_str)
-            current_run_id = self._run_id
+            root_id = self._run_id_to_root.pop(run_id_str, None)
+            ctx = self._active_runs.get(root_id) if root_id else None
+            latency = self._pop_latency(ctx.tool_start_times, run_id_str) if ctx else None
+            current_run_id = root_id
         self._log.debug("tool_result tool=%s latency_ms=%s run_id=%s", tool_name, latency, current_run_id)
         truncated_output = str(output)[:500]
         self._safe_db_write(
@@ -297,8 +375,10 @@ class _MonitorBase:
         run_id_str = str(run_id)
         tool_name = kwargs.get("name", "unknown_tool")
         with self._state_lock:
-            latency = self._pop_latency(self._tool_start_times, run_id_str)
-            current_run_id = self._run_id
+            root_id = self._run_id_to_root.pop(run_id_str, None)
+            ctx = self._active_runs.get(root_id) if root_id else None
+            latency = self._pop_latency(ctx.tool_start_times, run_id_str) if ctx else None
+            current_run_id = root_id
         error_str = f"{type(error).__name__}: {str(error)}"
         self._log.warning("tool error tool=%s run_id=%s error=%s", tool_name, current_run_id, error_str)
         self._safe_db_write(
@@ -317,14 +397,20 @@ class _MonitorBase:
         serialized: dict[str, Any] | None,
         query: str,
         run_id: UUID,
+        parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
         run_id_str = str(run_id)
+        parent_run_id_str = str(parent_run_id) if parent_run_id else None
         retriever_name = serialized.get("id", ["unknown_retriever"])[-1] if serialized else "unknown_retriever"
         with self._state_lock:
-            self._tool_start_times[run_id_str] = time.monotonic()
-            self._retriever_names[run_id_str] = retriever_name
-            current_run_id = self._run_id
+            root_id = self._run_id_to_root.get(parent_run_id_str) if parent_run_id_str else None
+            self._run_id_to_root[run_id_str] = root_id
+            ctx = self._active_runs.get(root_id) if root_id else None
+            if ctx:
+                ctx.tool_start_times[run_id_str] = time.monotonic()
+                ctx.retriever_names[run_id_str] = retriever_name
+            current_run_id = root_id
         self._log.debug("retriever_start name=%s run_id=%s", retriever_name, current_run_id)
         self._safe_db_write(
             lambda: self.db.insert_event(
@@ -339,9 +425,15 @@ class _MonitorBase:
     def _handle_retriever_end(self, documents: Any, run_id: UUID, **kwargs: Any) -> None:
         run_id_str = str(run_id)
         with self._state_lock:
-            latency = self._pop_latency(self._tool_start_times, run_id_str)
-            retriever_name = self._retriever_names.pop(run_id_str, "unknown_retriever")
-            current_run_id = self._run_id
+            root_id = self._run_id_to_root.pop(run_id_str, None)
+            ctx = self._active_runs.get(root_id) if root_id else None
+            if ctx:
+                latency = self._pop_latency(ctx.tool_start_times, run_id_str)
+                retriever_name = ctx.retriever_names.pop(run_id_str, "unknown_retriever")
+            else:
+                latency = None
+                retriever_name = "unknown_retriever"
+            current_run_id = root_id
         doc_count = len(documents) if documents is not None else 0
         self._log.debug(
             "retriever_end name=%s docs=%d latency_ms=%s run_id=%s", retriever_name, doc_count, latency, current_run_id
@@ -360,9 +452,15 @@ class _MonitorBase:
     def _handle_retriever_error(self, error: BaseException, run_id: UUID, **kwargs: Any) -> None:
         run_id_str = str(run_id)
         with self._state_lock:
-            latency = self._pop_latency(self._tool_start_times, run_id_str)
-            retriever_name = self._retriever_names.pop(run_id_str, "unknown_retriever")
-            current_run_id = self._run_id
+            root_id = self._run_id_to_root.pop(run_id_str, None)
+            ctx = self._active_runs.get(root_id) if root_id else None
+            if ctx:
+                latency = self._pop_latency(ctx.tool_start_times, run_id_str)
+                retriever_name = ctx.retriever_names.pop(run_id_str, "unknown_retriever")
+            else:
+                latency = None
+                retriever_name = "unknown_retriever"
+            current_run_id = root_id
         error_str = f"{type(error).__name__}: {str(error)}"
         self._log.warning("retriever error name=%s run_id=%s error=%s", retriever_name, current_run_id, error_str)
         self._safe_db_write(
@@ -386,7 +484,10 @@ class _MonitorBase:
             ]
         key = str(parent_run_id)
         with self._state_lock:
-            self._llm_inputs.setdefault(key, []).extend(formatted_messages)
+            root_id = self._run_id_to_root.get(key)
+            ctx = self._active_runs.get(root_id) if root_id else None
+            if ctx:
+                ctx.llm_inputs.setdefault(key, []).extend(formatted_messages)
 
     def _handle_llm_end(self, metadata: dict, parent_run_id: UUID | None, output_text: str | None = None) -> None:
         """Accumulate token counts and capture LLM output text from a completed LLM call."""
@@ -398,59 +499,47 @@ class _MonitorBase:
         cr_tok = cache_read_tok or 0
         cc_tok = cache_creation_tok or 0
 
+        parent_key = str(parent_run_id) if parent_run_id is not None else None
+
         with self._state_lock:
-            if input_tok is not None or output_tok is not None:
-                self._total_input_tokens += in_tok
-                self._total_output_tokens += out_tok
+            root_id = self._run_id_to_root.get(parent_key) if parent_key else None
+            ctx = self._active_runs.get(root_id) if root_id else None
 
-                if parent_run_id is not None:
-                    key = str(parent_run_id)
-                    entry = self._node_tokens.setdefault(
-                        key, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None}
-                    )
-                    entry["input"] += in_tok
-                    entry["output"] += out_tok
-                    if model:
-                        entry["model"] = model
+            if ctx:
+                if input_tok is not None or output_tok is not None:
+                    ctx.total_input_tokens += in_tok
+                    ctx.total_output_tokens += out_tok
 
-            if cache_read_tok is not None or cache_creation_tok is not None:
-                self._total_cache_read_tokens += cr_tok
-                self._total_cache_creation_tokens += cc_tok
+                    if parent_run_id is not None:
+                        entry = ctx.node_tokens.setdefault(
+                            parent_key, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None}
+                        )
+                        entry["input"] += in_tok
+                        entry["output"] += out_tok
+                        if model:
+                            entry["model"] = model
 
-                if parent_run_id is not None:
-                    key = str(parent_run_id)
-                    entry = self._node_tokens.setdefault(
-                        key, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None}
-                    )
-                    entry["cache_read"] += cr_tok
-                    entry["cache_creation"] += cc_tok
+                if cache_read_tok is not None or cache_creation_tok is not None:
+                    ctx.total_cache_read_tokens += cr_tok
+                    ctx.total_cache_creation_tokens += cc_tok
 
-            if self.capture_payloads and parent_run_id is not None and output_text is not None:
-                if self._max_payload_chars is not None:
-                    output_text = output_text[: self._max_payload_chars]
-                self._llm_outputs[str(parent_run_id)] = output_text
+                    if parent_run_id is not None:
+                        entry = ctx.node_tokens.setdefault(
+                            parent_key, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "model": None}
+                        )
+                        entry["cache_read"] += cr_tok
+                        entry["cache_creation"] += cc_tok
 
-        if self._pricing is not None and (input_tok is not None or output_tok is not None):
+                if self.capture_payloads and parent_run_id is not None and output_text is not None:
+                    if self._max_payload_chars is not None:
+                        output_text = output_text[: self._max_payload_chars]
+                    ctx.llm_outputs[parent_key] = output_text
+
+        if ctx is not None and self._pricing is not None and (input_tok is not None or output_tok is not None):
             cost = self._pricing.estimate_cost(model, in_tok, out_tok)
             if cost is not None:
                 with self._state_lock:
-                    self._total_cost = (self._total_cost or 0.0) + cost
-
-    def _clear_timing_state(self) -> None:
-        """Clear all per-run state. Must be called under _state_lock."""
-        self._node_start_times.clear()
-        self._node_names.clear()
-        self._tool_start_times.clear()
-        self._retriever_names.clear()
-        self._node_tokens.clear()
-        self._llm_inputs.clear()
-        self._llm_outputs.clear()
-        self._total_input_tokens = 0
-        self._total_output_tokens = 0
-        self._total_cache_read_tokens = 0
-        self._total_cache_creation_tokens = 0
-        self._total_cost = None
-        self._run_id = None
+                    ctx.total_cost = (ctx.total_cost or 0.0) + cost
 
     @staticmethod
     def _extract_messages(data: Any) -> list[dict] | None:

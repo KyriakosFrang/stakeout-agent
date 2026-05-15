@@ -69,15 +69,27 @@ class OTELMonitorDB(AbstractMonitorDB):
     # AbstractMonitorDB interface
     # ------------------------------------------------------------------
 
-    def create_run(self, run_id: str, graph_id: str, thread_id: str) -> None:
-        span = self._tracer.start_span(
-            graph_id,
-            attributes={
-                "stakeout.run_id": run_id,
-                "stakeout.graph_id": graph_id,
-                "stakeout.thread_id": thread_id,
-            },
-        )
+    def create_run(
+        self,
+        run_id: str,
+        graph_id: str,
+        thread_id: str,
+        run_inputs: str | None = None,
+        parent_run_id: str | None = None,
+        prompt_version: str | None = None,
+    ) -> None:
+        attrs: dict[str, str] = {
+            "stakeout.run_id": run_id,
+            "stakeout.graph_id": graph_id,
+            "stakeout.thread_id": thread_id,
+        }
+        if run_inputs is not None:
+            attrs["stakeout.run_inputs"] = run_inputs
+        if parent_run_id is not None:
+            attrs["stakeout.parent_run_id"] = parent_run_id
+        if prompt_version is not None:
+            attrs["stakeout.prompt_version"] = prompt_version
+        span = self._tracer.start_span(graph_id, attributes=attrs)
         with self._lock:
             self._run_spans[run_id] = span
         _logger.debug("otel: root span started run_id=%s graph_id=%s", run_id, graph_id)

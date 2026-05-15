@@ -14,60 +14,6 @@ _log = logging.getLogger(__name__)
 _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 0.5  # seconds; doubles each attempt
 
-_CREATE_TABLES_SQL = """
-CREATE TABLE IF NOT EXISTS runs (
-    run_id                      TEXT PRIMARY KEY,
-    graph_id                    TEXT,
-    thread_id                   TEXT,
-    status                      TEXT DEFAULT 'running',
-    started_at                  TIMESTAMPTZ DEFAULT NOW(),
-    ended_at                    TIMESTAMPTZ,
-    error                       TEXT,
-    total_input_tokens          INTEGER,
-    total_output_tokens         INTEGER,
-    estimated_cost_usd          DOUBLE PRECISION,
-    total_cache_read_tokens     INTEGER,
-    total_cache_creation_tokens INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS events (
-    id                   SERIAL PRIMARY KEY,
-    run_id               TEXT,
-    graph_id             TEXT,
-    event_type           TEXT,
-    node_name            TEXT,
-    latency_ms           DOUBLE PRECISION,
-    payload              JSONB,
-    error                TEXT,
-    messages             JSONB,
-    input_tokens         INTEGER,
-    output_tokens        INTEGER,
-    model                TEXT,
-    timestamp            TIMESTAMPTZ DEFAULT NOW(),
-    cache_read_tokens    INTEGER,
-    cache_creation_tokens INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_runs_started_at  ON runs(started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_runs_graph_id    ON runs(graph_id);
-CREATE INDEX IF NOT EXISTS idx_runs_status      ON runs(status);
-CREATE INDEX IF NOT EXISTS idx_events_run_id    ON events(run_id);
-CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
-
-ALTER TABLE runs   ADD COLUMN IF NOT EXISTS total_input_tokens          INTEGER;
-ALTER TABLE runs   ADD COLUMN IF NOT EXISTS total_output_tokens         INTEGER;
-ALTER TABLE runs   ADD COLUMN IF NOT EXISTS estimated_cost_usd          DOUBLE PRECISION;
-ALTER TABLE runs   ADD COLUMN IF NOT EXISTS total_cache_read_tokens     INTEGER;
-ALTER TABLE runs   ADD COLUMN IF NOT EXISTS total_cache_creation_tokens INTEGER;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS input_tokens                INTEGER;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS output_tokens               INTEGER;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS model                       TEXT;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS llm_input                   JSONB;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS llm_output                  TEXT;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS cache_read_tokens           INTEGER;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS cache_creation_tokens       INTEGER;
-"""
-
 # Retryable psycopg2 error class names — checked by name so this module
 # stays importable even when psycopg2 is not installed.
 _RETRYABLE_PG_EXC_NAMES = frozenset({"OperationalError", "InterfaceError"})
@@ -87,10 +33,13 @@ def _make_pg_conn():
         ) from exc
 
     uri = os.getenv("POSTGRES_URI") or os.getenv("DATABASE_URL", "postgresql://localhost/stakeout")
+
+    from stakeout_agent.backends.migrations import run_migrations
+
+    run_migrations(uri)
+
     conn = psycopg2.connect(uri, connect_timeout=5)
     conn.autocommit = True
-    with conn.cursor() as cur:
-        cur.execute(_CREATE_TABLES_SQL)
     _log.debug("PostgresMonitorDB connected uri=%s", uri)
     return conn
 
@@ -142,15 +91,33 @@ class PostgresMonitorDB(AbstractMonitorDB):
                     _log.error("%s failed: %s", op_name, exc)
                     return
 
-    def create_run(self, run_id: str, graph_id: str, thread_id: str) -> None:
+    def create_run(
+        self,
+        run_id: str,
+        graph_id: str,
+        thread_id: str,
+        run_inputs: str | None = None,
+        parent_run_id: str | None = None,
+        prompt_version: str | None = None,
+    ) -> None:
         def _op():
             with self._connection.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO runs (run_id, graph_id, thread_id, status, started_at, ended_at, error)
-                    VALUES (%s, %s, %s, 'running', %s, NULL, NULL)
+                    INSERT INTO runs
+                        (run_id, graph_id, thread_id, status, started_at, ended_at, error,
+                         run_inputs, parent_run_id, prompt_version)
+                    VALUES (%s, %s, %s, 'running', %s, NULL, NULL, %s, %s, %s)
                     """,
-                    (run_id, graph_id, thread_id, datetime.now(timezone.utc)),
+                    (
+                        run_id,
+                        graph_id,
+                        thread_id,
+                        datetime.now(timezone.utc),
+                        run_inputs,
+                        parent_run_id,
+                        prompt_version,
+                    ),
                 )
             _log.debug("create_run inserted run_id=%s graph_id=%s", run_id, graph_id)
 

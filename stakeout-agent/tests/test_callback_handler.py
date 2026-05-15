@@ -165,8 +165,15 @@ class TestSyncCallback:
         cb, db = self._make()
         run_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=run_id, parent_run_id=None)
-        db.create_run.assert_called_once_with(str(run_id), GRAPH_ID, THREAD_ID)
-        assert cb._run_id == str(run_id)
+        db.create_run.assert_called_once_with(
+            str(run_id),
+            GRAPH_ID,
+            THREAD_ID,
+            run_inputs="{}",
+            parent_run_id=None,
+            prompt_version=None,
+        )
+        assert str(run_id) in cb._active_runs
 
     def test_on_chain_start_node_inserts_event(self):
         cb, db = self._make()
@@ -249,7 +256,7 @@ class TestSyncCallback:
         root_id = make_uuid()
         tool_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
-        cb.on_tool_start({"name": "search"}, "query", run_id=tool_id)
+        cb.on_tool_start({"name": "search"}, "query", run_id=tool_id, parent_run_id=root_id)
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "tool_call"
         assert kwargs["node_name"] == "search"
@@ -259,7 +266,7 @@ class TestSyncCallback:
         root_id = make_uuid()
         tool_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
-        cb.on_tool_start({"name": "search"}, "query", run_id=tool_id)
+        cb.on_tool_start({"name": "search"}, "query", run_id=tool_id, parent_run_id=root_id)
         cb.on_tool_end("result", run_id=tool_id, name="search")
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "tool_result"
@@ -269,7 +276,7 @@ class TestSyncCallback:
         root_id = make_uuid()
         tool_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
-        cb.on_tool_start({"name": "search"}, "query", run_id=tool_id)
+        cb.on_tool_start({"name": "search"}, "query", run_id=tool_id, parent_run_id=root_id)
         cb.on_tool_error(OSError("network"), run_id=tool_id, name="search")
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "error"
@@ -291,7 +298,14 @@ class TestAsyncCallback:
         cb, db = self._make()
         run_id = make_uuid()
         await cb.on_chain_start({}, {}, run_id=run_id, parent_run_id=None)
-        db.create_run.assert_called_once_with(str(run_id), GRAPH_ID, THREAD_ID)
+        db.create_run.assert_called_once_with(
+            str(run_id),
+            GRAPH_ID,
+            THREAD_ID,
+            run_inputs="{}",
+            parent_run_id=None,
+            prompt_version=None,
+        )
 
     async def test_on_chain_end_root_completes_run(self):
         cb, db = self._make()
@@ -313,7 +327,7 @@ class TestAsyncCallback:
         root_id = make_uuid()
         tool_id = make_uuid()
         await cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
-        await cb.on_tool_start({"name": "calc"}, "1+1", run_id=tool_id)
+        await cb.on_tool_start({"name": "calc"}, "1+1", run_id=tool_id, parent_run_id=root_id)
         await cb.on_tool_end("2", run_id=tool_id, name="calc")
         events = [c.kwargs["event_type"] for c in db.insert_event.call_args_list]
         assert "tool_call" in events
@@ -426,7 +440,7 @@ class TestLLMPayloadCapture:
         root_id = make_uuid()
         tool_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
-        cb.on_tool_start({"name": "t"}, "input", run_id=tool_id)
+        cb.on_tool_start({"name": "t"}, "input", run_id=tool_id, parent_run_id=root_id)
         cb.on_tool_end("result", run_id=tool_id, name="t")
         assert cb.dropped_events == 2
 
@@ -453,7 +467,9 @@ class TestLLMPayloadCapture:
         root_id = make_uuid()
         tool_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
-        cb.on_tool_start({"name": "search"}, '{"q": "hello"}', run_id=tool_id, inputs={"q": "hello"})
+        cb.on_tool_start(
+            {"name": "search"}, '{"q": "hello"}', run_id=tool_id, parent_run_id=root_id, inputs={"q": "hello"}
+        )
         kwargs = db.insert_event.call_args.kwargs
         assert '"q"' in kwargs["payload"]["input"]
         assert "hello" in kwargs["payload"]["input"]
@@ -463,7 +479,7 @@ class TestLLMPayloadCapture:
         root_id = make_uuid()
         tool_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
-        cb.on_tool_start({"name": "search"}, "raw query", run_id=tool_id)
+        cb.on_tool_start({"name": "search"}, "raw query", run_id=tool_id, parent_run_id=root_id)
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["payload"]["input"] == "raw query"
 
@@ -472,7 +488,9 @@ class TestLLMPayloadCapture:
         root_id = make_uuid()
         ret_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
-        cb.on_retriever_start({"id": ["pkg", "VectorStoreRetriever"]}, "what is RAG?", run_id=ret_id)
+        cb.on_retriever_start(
+            {"id": ["pkg", "VectorStoreRetriever"]}, "what is RAG?", run_id=ret_id, parent_run_id=root_id
+        )
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "retriever_start"
         assert kwargs["node_name"] == "VectorStoreRetriever"
@@ -483,7 +501,7 @@ class TestLLMPayloadCapture:
         root_id = make_uuid()
         ret_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
-        cb.on_retriever_start({"id": ["pkg", "VectorStoreRetriever"]}, "query", run_id=ret_id)
+        cb.on_retriever_start({"id": ["pkg", "VectorStoreRetriever"]}, "query", run_id=ret_id, parent_run_id=root_id)
         cb.on_retriever_end(["doc1", "doc2", "doc3"], run_id=ret_id)
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "retriever_end"
@@ -495,7 +513,7 @@ class TestLLMPayloadCapture:
         root_id = make_uuid()
         ret_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
-        cb.on_retriever_start({"id": ["pkg", "VectorStoreRetriever"]}, "query", run_id=ret_id)
+        cb.on_retriever_start({"id": ["pkg", "VectorStoreRetriever"]}, "query", run_id=ret_id, parent_run_id=root_id)
         cb.on_retriever_error(ConnectionError("index unavailable"), run_id=ret_id)
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "error"
@@ -627,5 +645,4 @@ class TestLLMPayloadClearance:
         cb.on_chat_model_start({}, [[FakeMessage("human", "hi")]], run_id=make_uuid(), parent_run_id=node_id)
         cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
         cb.on_chain_end({}, run_id=root_id, parent_run_id=None)
-        assert cb._llm_inputs == {}
-        assert cb._llm_outputs == {}
+        assert cb._active_runs == {}

@@ -164,26 +164,28 @@ class TestCrewLifecycle:
         args = db.create_run.call_args.args
         assert args[1] == CREW_ID
         assert args[2] == THREAD_ID
-        assert cb._run_id is not None
+        assert len(cb._active_runs) == 1
 
     def test_crew_start_stores_run_id(self):
         cb, db, bus = _make()
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
-        run_id = cb._run_id
+        run_id = db.create_run.call_args.args[0]
         assert isinstance(run_id, str) and len(run_id) == 36  # UUID format
 
     def test_crew_end_completes_run(self):
         cb, db, bus = _make()
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+        run_id = db.create_run.call_args.args[0]
         bus.emit(CrewKickoffCompletedEvent, None, _crew_completed_event())
         db.complete_run.assert_called_once()
-        assert db.complete_run.call_args.args[0] == cb._run_id
+        assert db.complete_run.call_args.args[0] == run_id
 
     def test_crew_error_fails_run(self):
         cb, db, bus = _make()
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+        run_id = db.create_run.call_args.args[0]
         bus.emit(CrewKickoffFailedEvent, None, _crew_failed_event(error="Something went wrong"))
-        db.fail_run.assert_called_once_with(cb._run_id, "Something went wrong")
+        db.fail_run.assert_called_once_with(run_id, "Something went wrong")
 
 
 # ---------------------------------------------------------------------------
@@ -200,13 +202,13 @@ class TestTaskEvents:
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "node_start"
         assert kwargs["node_name"] == "analyse data"
-        assert kwargs["run_id"] == cb._run_id
+        assert kwargs["run_id"] == db.create_run.call_args.args[0]
         assert kwargs["graph_id"] == CREW_ID
 
     def test_task_end_inserts_node_end_event_with_latency(self):
         cb, db, bus = _make()
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._node_start_times["write report"] = time.monotonic() - 0.05
+        next(iter(cb._active_runs.values())).node_start_times["write report"] = time.monotonic() - 0.05
         bus.emit(TaskCompletedEvent, None, _task_completed_event())
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "node_end"
@@ -216,7 +218,7 @@ class TestTaskEvents:
     def test_task_end_includes_output_in_payload(self):
         cb, db, bus = _make()
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._node_start_times["write report"] = time.monotonic()
+        next(iter(cb._active_runs.values())).node_start_times["write report"] = time.monotonic()
         bus.emit(TaskCompletedEvent, None, _task_completed_event(raw="Final report"))
         kwargs = db.insert_event.call_args.kwargs
         assert "output" in kwargs["payload"]
@@ -224,7 +226,7 @@ class TestTaskEvents:
     def test_task_error_inserts_error_event(self):
         cb, db, bus = _make()
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._node_start_times["write report"] = time.monotonic()
+        next(iter(cb._active_runs.values())).node_start_times["write report"] = time.monotonic()
         bus.emit(TaskFailedEvent, None, _task_failed_event(error="LLM timeout"))
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "error"
@@ -257,7 +259,7 @@ class TestToolEvents:
     def test_tool_end_inserts_tool_result_event_with_latency(self):
         cb, db, bus = _make()
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._tool_start_times["web_search"] = time.monotonic() - 0.05
+        next(iter(cb._active_runs.values())).tool_start_times["web_search"] = time.monotonic() - 0.05
         bus.emit(ToolUsageFinishedEvent, None, _tool_finished_event(tool_name="web_search", output="Latest AI news"))
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "tool_result"
@@ -268,7 +270,7 @@ class TestToolEvents:
     def test_tool_error_inserts_error_event(self):
         cb, db, bus = _make()
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._tool_start_times["web_search"] = time.monotonic()
+        next(iter(cb._active_runs.values())).tool_start_times["web_search"] = time.monotonic()
         bus.emit(ToolUsageErrorEvent, None, _tool_error_event(tool_name="web_search", error="Connection refused"))
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "error"
@@ -296,19 +298,21 @@ class TestAsyncCrewAICallback:
         args = db.create_run.call_args.args
         assert args[1] == CREW_ID
         assert args[2] == THREAD_ID
-        assert cb._run_id is not None
+        assert len(cb._active_runs) == 1
 
     async def test_crew_end_completes_run(self):
         cb, db, bus = _make_async()
         await bus.aemit(CrewKickoffStartedEvent, None, _crew_started_event())
+        run_id = db.create_run.call_args.args[0]
         await bus.aemit(CrewKickoffCompletedEvent, None, _crew_completed_event())
-        db.complete_run.assert_called_once_with(cb._run_id)
+        db.complete_run.assert_called_once_with(run_id)
 
     async def test_crew_error_fails_run(self):
         cb, db, bus = _make_async()
         await bus.aemit(CrewKickoffStartedEvent, None, _crew_started_event())
+        run_id = db.create_run.call_args.args[0]
         await bus.aemit(CrewKickoffFailedEvent, None, _crew_failed_event(error="Async boom"))
-        db.fail_run.assert_called_once_with(cb._run_id, "Async boom")
+        db.fail_run.assert_called_once_with(run_id, "Async boom")
 
     async def test_task_start_inserts_node_start_event(self):
         cb, db, bus = _make_async()
@@ -321,7 +325,7 @@ class TestAsyncCrewAICallback:
     async def test_task_end_inserts_node_end_with_latency(self):
         cb, db, bus = _make_async()
         await bus.aemit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._node_start_times["write report"] = time.monotonic() - 0.05
+        next(iter(cb._active_runs.values())).node_start_times["write report"] = time.monotonic() - 0.05
         await bus.aemit(TaskCompletedEvent, None, _task_completed_event())
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "node_end"
@@ -330,7 +334,7 @@ class TestAsyncCrewAICallback:
     async def test_task_error_inserts_error_event(self):
         cb, db, bus = _make_async()
         await bus.aemit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._node_start_times["write report"] = time.monotonic()
+        next(iter(cb._active_runs.values())).node_start_times["write report"] = time.monotonic()
         await bus.aemit(TaskFailedEvent, None, _task_failed_event(error="Async timeout"))
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "error"
@@ -347,7 +351,7 @@ class TestAsyncCrewAICallback:
     async def test_tool_end_inserts_tool_result_with_latency(self):
         cb, db, bus = _make_async()
         await bus.aemit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._tool_start_times["web_search"] = time.monotonic() - 0.05
+        next(iter(cb._active_runs.values())).tool_start_times["web_search"] = time.monotonic() - 0.05
         await bus.aemit(ToolUsageFinishedEvent, None, _tool_finished_event(tool_name="web_search"))
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "tool_result"
@@ -356,7 +360,7 @@ class TestAsyncCrewAICallback:
     async def test_tool_error_inserts_error_event(self):
         cb, db, bus = _make_async()
         await bus.aemit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._tool_start_times["web_search"] = time.monotonic()
+        next(iter(cb._active_runs.values())).tool_start_times["web_search"] = time.monotonic()
         await bus.aemit(ToolUsageErrorEvent, None, _tool_error_event(tool_name="web_search", error="Async refused"))
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "error"
@@ -381,7 +385,7 @@ def _llm_completed(
 class TestCrewAIPayloadCapture:
     def _run_task_with_llm(self, cb, db, bus, messages, response, task_name="analyse data"):
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._node_start_times[task_name] = time.monotonic()
+        next(iter(cb._active_runs.values())).node_start_times[task_name] = time.monotonic()
         bus.emit(LLMCallStartedEvent, None, _llm_started(task_name, messages))
         bus.emit(LLMCallCompletedEvent, None, _llm_completed(task_name, response))
         bus.emit(TaskCompletedEvent, None, _task_completed_event(task_name=task_name))
@@ -454,7 +458,7 @@ class TestCrewAIPayloadCapture:
         LLMCallCompletedEvent with TOOL_CALL type skips storing the response text."""
         cb, db, bus = _make()
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._node_start_times["analyse data"] = time.monotonic()
+        next(iter(cb._active_runs.values())).node_start_times["analyse data"] = time.monotonic()
         bus.emit(
             LLMCallStartedEvent,
             None,
@@ -484,7 +488,7 @@ class TestCrewAIPayloadCapture:
     def test_node_without_llm_call_has_no_llm_fields(self):
         cb, db, bus = _make()
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._node_start_times["write report"] = time.monotonic()
+        next(iter(cb._active_runs.values())).node_start_times["write report"] = time.monotonic()
         bus.emit(TaskCompletedEvent, None, _task_completed_event())
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["llm_input"] is None
@@ -505,7 +509,7 @@ class TestDroppedEvents:
         cb, db, bus = _make()
         db.insert_event.side_effect = RuntimeError("db down")
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._node_start_times["write report"] = time.monotonic()
+        next(iter(cb._active_runs.values())).node_start_times["write report"] = time.monotonic()
         bus.emit(TaskStartedEvent, None, _task_started_event())
         assert cb.dropped_events == 1
 
@@ -519,7 +523,7 @@ class TestDroppedEvents:
         cb, db, bus = _make()
         db.insert_event.side_effect = RuntimeError("db down")
         bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
-        cb._node_start_times["write report"] = time.monotonic()
+        next(iter(cb._active_runs.values())).node_start_times["write report"] = time.monotonic()
         bus.emit(TaskStartedEvent, None, _task_started_event())
         bus.emit(TaskCompletedEvent, None, _task_completed_event())
         assert cb.dropped_events == 2
