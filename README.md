@@ -93,6 +93,7 @@ stakeout-agent hooks into your framework's event system. It records a `run` docu
 | Token usage | **Yes** — per node and rolled up to the run |
 | Cost estimation | **Yes** — opt-in, configurable per model |
 | Prompt & response capture | **Yes** — per node, opt-out, truncation supported |
+| Non-blocking writes | **Yes** — opt-in `BufferedWriter` keeps DB I/O off the LLM hot path |
 | Frameworks | **LangGraph + CrewAI** |
 | Backends | **MongoDB + PostgreSQL + OpenTelemetry** |
 | Dashboard included | **Yes** — [dedicated real-time observability UI](https://github.com/KyriakosFrang/stakeout-dashboard) |
@@ -446,6 +447,7 @@ Each example runs a two-agent crew (Researcher + Writer) with a `MultiplyTool`, 
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP collector endpoint; triggers auto-configure when set |
 | `OTEL_EXPORTER_OTLP_HEADERS` | — | Headers for the OTLP exporter (e.g. auth tokens) |
 | `OTEL_SERVICE_NAME` | `stakeout-agent` | Service name attached to all spans |
+| `STAKEOUT_DLQ_PATH` | `stakeout_dlq.jsonl` | Path for the `BufferedWriter` dead-letter queue file |
 
 ### PostgreSQL
 
@@ -611,6 +613,64 @@ logging.getLogger("stakeout_agent").setLevel(logging.DEBUG)
 
 ---
 
+## Non-blocking writes (`BufferedWriter`)
+
+By default, database writes happen synchronously on the LLM hot path. A network blip or a slow MongoDB write adds directly to the latency your users experience. `BufferedWriter` decouples persistence from the callback: all writes are enqueued in memory and executed by a background thread, so the LLM call returns immediately.
+
+```python
+from stakeout_agent import LangGraphMonitorCallback, MongoMonitorDB, BufferedWriter
+
+cb = LangGraphMonitorCallback(
+    graph_id="my-graph",
+    thread_id="t1",
+    db=BufferedWriter(
+        backend=MongoMonitorDB(),
+        max_queue_size=10_000,          # in-memory queue depth (default: 10 000)
+        max_retries=3,                  # retries per write with exponential backoff (default: 3)
+        dlq_path="stakeout_dlq.jsonl",  # or set STAKEOUT_DLQ_PATH env var
+    )
+)
+```
+
+`BufferedWriter` wraps any `AbstractMonitorDB` and is itself an `AbstractMonitorDB`, so it slots into the existing `db=` parameter with no other changes. It works with all callback variants — `LangGraphMonitorCallback`, `AsyncLangGraphMonitorCallback`, `CrewAIMonitorCallback`, and `AsyncCrewAIMonitorCallback`.
+
+### Retry and dead-letter queue
+
+Failed writes are retried up to `max_retries` times with exponential backoff (0.5 s, 1 s, 2 s, …). Writes that exhaust all retries are appended to a **dead-letter queue (DLQ)** file as newline-delimited JSON — never silently dropped. Each DLQ entry contains the original method, arguments, error message, and timestamp for replay or alerting.
+
+```json
+{"timestamp": "2026-05-15T10:00:00Z", "method": "insert_event", "args": ["run-1", "my_graph", "node_end", "agent"], "kwargs": {...}, "error": "ConnectionRefusedError: [Errno 111] Connection refused"}
+```
+
+Set `STAKEOUT_DLQ_PATH` to control the file location (default: `stakeout_dlq.jsonl` in the working directory).
+
+### Graceful shutdown
+
+Call `close()` — or use the context manager — to flush all pending writes before the process exits:
+
+```python
+# Context manager — flushes on __exit__
+with BufferedWriter(backend=MongoMonitorDB()) as writer:
+    cb = LangGraphMonitorCallback(graph_id="g", thread_id="t", db=writer)
+    result = graph.invoke(inputs, config={"callbacks": [cb]})
+
+# Explicit close — when the writer outlives a single with block
+writer = BufferedWriter(backend=MongoMonitorDB())
+cb = LangGraphMonitorCallback(graph_id="g", thread_id="t", db=writer)
+# ... run many graphs ...
+writer.close()  # blocks until the queue is fully drained
+```
+
+The background worker is a **daemon thread**: the process can exit without calling `close()`, but any still-queued writes will be lost. Call `close()` when guaranteed delivery matters.
+
+### Observability
+
+```python
+print(writer.dropped_events)  # writes that went to DLQ or were dropped due to a full queue
+```
+
+---
+
 ## Threads and conversation history
 
 ### What `thread_id` means
@@ -671,6 +731,7 @@ Integration tests run against real backend services and are kept separate from t
 | `tests/integration/test_mongo_integration.py` | `mongo` | Full CRUD lifecycle against a real MongoDB instance |
 | `tests/integration/test_postgres_integration.py` | `postgres` | Full CRUD lifecycle against a real PostgreSQL instance |
 | `tests/integration/test_otel_inprocess.py` | No | OTEL backend with `InMemorySpanExporter` — span tree, attributes, events, error paths |
+| `tests/integration/test_buffered_writer_integration.py` | `mongo`, `postgres` | `BufferedWriter` lifecycle, concurrent writes, retry-and-recover, DLQ — against real backends |
 
 The OTEL in-process tests use the SDK's `InMemorySpanExporter` and run without any container. MongoDB and Postgres tests auto-skip when the container isn't reachable, so a plain `pytest` never fails due to a missing service.
 
@@ -742,6 +803,7 @@ Select the `stakeout-agent` service (or whatever `OTEL_SERVICE_NAME` is set to) 
 - [x] Run input capture (`run_inputs` stored on the run document)
 - [x] Multi-agent run linking (`parent_run_id` constructor parameter)
 - [x] Prompt version tagging (`prompt_version` constructor parameter)
+- [x] Non-blocking async buffered writes (`BufferedWriter` — in-memory queue, exponential-backoff retry, dead-letter queue)
 - [x] [Dedicated UI dashboard](https://github.com/KyriakosFrang/stakeout-dashboard) (Run History, Node Performance, Run Inspector, Thread Deep Dive)
 - [ ] Additional agentic frameworks (PydanticAI, SemanticKernel, AutoGen etc.)
 - [ ] Additional storage backends (SQLite, Redis, …)
