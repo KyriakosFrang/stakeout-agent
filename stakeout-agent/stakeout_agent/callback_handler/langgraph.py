@@ -26,9 +26,9 @@ from .base import _MonitorBase
 class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
     """Sync monitor for use with graph.invoke().
 
-    **Do not share a single instance across concurrent invocations.** Per-run state
-    (_run_id, timing dicts) is stored on the instance; a second concurrent call will
-    overwrite it and corrupt both runs. Create a new instance for each graph.invoke() call.
+    A single instance can safely be shared across concurrent graph.invoke() calls —
+    per-run state is keyed by the root run UUID, so concurrent invocations cannot
+    interfere with each other.
 
     Usage:
         monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
@@ -100,11 +100,11 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         input_str: str,
         *,
         run_id: UUID,
-        parent_run_id: UUID | None = None,  # noqa: ARG002
+        parent_run_id: UUID | None = None,
         inputs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        self._handle_tool_start(serialized, input_str, run_id, inputs=inputs, **kwargs)
+        self._handle_tool_start(serialized, input_str, run_id, parent_run_id=parent_run_id, inputs=inputs, **kwargs)
 
     def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
         self._handle_tool_end(output, run_id, **kwargs)
@@ -118,10 +118,10 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         query: str,
         *,
         run_id: UUID,
-        parent_run_id: UUID | None = None,  # noqa: ARG002
+        parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        self._handle_retriever_start(serialized, query, run_id, **kwargs)
+        self._handle_retriever_start(serialized, query, run_id, parent_run_id=parent_run_id, **kwargs)
 
     def on_retriever_end(
         self,
@@ -194,9 +194,9 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
 class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
     """Async monitor for use with graph.ainvoke() / graph.astream().
 
-    **Do not share a single instance across concurrent invocations.** Per-run state
-    (_run_id, timing dicts) is stored on the instance; concurrent calls via asyncio.gather
-    will overwrite each other's state. Create a new instance for each graph.ainvoke() call.
+    A single instance can safely be shared across concurrent graph.ainvoke() calls —
+    per-run state is keyed by the root run UUID, so concurrent invocations via
+    asyncio.gather cannot interfere with each other.
 
     Usage:
         monitor = AsyncLangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
@@ -273,13 +273,16 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         input_str: str,
         *,
         run_id: UUID,
-        parent_run_id: UUID | None = None,  # noqa: ARG002
+        parent_run_id: UUID | None = None,
         inputs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            None, lambda: self._handle_tool_start(serialized, input_str, run_id, inputs=inputs, **kwargs)
+            None,
+            lambda: self._handle_tool_start(
+                serialized, input_str, run_id, parent_run_id=parent_run_id, inputs=inputs, **kwargs
+            ),
         )
 
     async def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
@@ -296,11 +299,14 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         query: str,
         *,
         run_id: UUID,
-        parent_run_id: UUID | None = None,  # noqa: ARG002
+        parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: self._handle_retriever_start(serialized, query, run_id, **kwargs))
+        await loop.run_in_executor(
+            None,
+            lambda: self._handle_retriever_start(serialized, query, run_id, parent_run_id=parent_run_id, **kwargs),
+        )
 
     async def on_retriever_end(
         self,

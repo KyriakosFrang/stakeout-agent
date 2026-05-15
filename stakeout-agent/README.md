@@ -175,22 +175,26 @@ monitor = AsyncCrewAIMonitorCallback(crew_id="my_crew", thread_id="thread_123")
 await crew.akickoff(inputs={...})
 ```
 
-### One instance per invocation
+### Concurrent invocations
 
-Each callback instance stores per-run state (run ID, node timings, token accumulators) as instance variables. **Do not share a single instance across concurrent invocations** — a second call will overwrite the first run's state, causing events to be written under the wrong run ID and latencies to be miscalculated.
+**LangGraph** — a single callback instance is safe to share across concurrent `graph.invoke()` / `graph.ainvoke()` calls. Per-run state is keyed internally by the root run UUID, so two simultaneous invocations never interfere with each other:
 
 ```python
-# Wrong — shared instance, concurrent calls corrupt each other
+# Fine — one shared instance, both runs tracked independently
 monitor = AsyncLangGraphMonitorCallback(graph_id="g", thread_id="t")
 await asyncio.gather(
     graph.ainvoke(inputs_a, config={"callbacks": [monitor]}),
     graph.ainvoke(inputs_b, config={"callbacks": [monitor]}),
 )
+```
 
-# Correct — separate instance per invocation
+**CrewAI** — use a separate instance per concurrent kickoff. CrewAI's event bus is global and does not carry a run identifier, so events from two simultaneous crews on the same listener cannot be reliably routed:
+
+```python
+# Correct — separate instance per concurrent kickoff
 await asyncio.gather(
-    graph.ainvoke(inputs_a, config={"callbacks": [AsyncLangGraphMonitorCallback(graph_id="g", thread_id="t")]}),
-    graph.ainvoke(inputs_b, config={"callbacks": [AsyncLangGraphMonitorCallback(graph_id="g", thread_id="t")]}),
+    crew.akickoff(inputs_a),   # monitor_a registered with crew_a
+    crew.akickoff(inputs_b),   # monitor_b registered with crew_b
 )
 ```
 
