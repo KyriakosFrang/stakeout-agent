@@ -35,6 +35,7 @@ def _make_pg_conn():
     uri = os.getenv("POSTGRES_URI") or os.getenv("DATABASE_URL", "postgresql://localhost/stakeout")
 
     from stakeout_agent.backends.migrations import run_migrations
+
     run_migrations(uri)
 
     conn = psycopg2.connect(uri, connect_timeout=5)
@@ -108,8 +109,15 @@ class PostgresMonitorDB(AbstractMonitorDB):
                          run_inputs, parent_run_id, prompt_version)
                     VALUES (%s, %s, %s, 'running', %s, NULL, NULL, %s, %s, %s)
                     """,
-                    (run_id, graph_id, thread_id, datetime.now(timezone.utc),
-                     run_inputs, parent_run_id, prompt_version),
+                    (
+                        run_id,
+                        graph_id,
+                        thread_id,
+                        datetime.now(timezone.utc),
+                        run_inputs,
+                        parent_run_id,
+                        prompt_version,
+                    ),
                 )
             _log.debug("create_run inserted run_id=%s graph_id=%s", run_id, graph_id)
 

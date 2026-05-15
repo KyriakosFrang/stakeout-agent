@@ -140,11 +140,7 @@ class _MonitorBase:
                 self._active_runs[run_id_str] = ctx
                 self._run_id_to_root[run_id_str] = run_id_str
             self._log.debug("run started run_id=%s", run_id_str)
-            run_inputs = (
-                self._safe_truncate(inputs, self._max_payload_chars or 5000)
-                if self.capture_payloads
-                else None
-            )
+            run_inputs = self._safe_truncate(inputs, self._max_payload_chars or 5000) if self.capture_payloads else None
             _parent = self.parent_run_id
             _version = self.prompt_version
             self._safe_db_write(

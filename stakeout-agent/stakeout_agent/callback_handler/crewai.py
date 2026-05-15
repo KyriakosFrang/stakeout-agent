@@ -110,7 +110,10 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
                 "crewai is required for CrewAIMonitorCallback. Install it with: pip install 'stakeout-agent[crewai]'"
             )
         _MonitorBase.__init__(
-            self, crew_id, thread_id, db,
+            self,
+            crew_id,
+            thread_id,
+            db,
             capture_payloads=capture_payloads,
             max_payload_chars=max_payload_chars,
             parent_run_id=parent_run_id,
@@ -357,7 +360,10 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
                 "Install it with: pip install 'stakeout-agent[crewai]'"
             )
         _MonitorBase.__init__(
-            self, crew_id, thread_id, db,
+            self,
+            crew_id,
+            thread_id,
+            db,
             capture_payloads=capture_payloads,
             max_payload_chars=max_payload_chars,
             parent_run_id=parent_run_id,

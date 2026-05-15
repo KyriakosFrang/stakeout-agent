@@ -166,8 +166,12 @@ class TestSyncCallback:
         run_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=run_id, parent_run_id=None)
         db.create_run.assert_called_once_with(
-            str(run_id), GRAPH_ID, THREAD_ID,
-            run_inputs="{}", parent_run_id=None, prompt_version=None,
+            str(run_id),
+            GRAPH_ID,
+            THREAD_ID,
+            run_inputs="{}",
+            parent_run_id=None,
+            prompt_version=None,
         )
         assert str(run_id) in cb._active_runs
 
@@ -295,8 +299,12 @@ class TestAsyncCallback:
         run_id = make_uuid()
         await cb.on_chain_start({}, {}, run_id=run_id, parent_run_id=None)
         db.create_run.assert_called_once_with(
-            str(run_id), GRAPH_ID, THREAD_ID,
-            run_inputs="{}", parent_run_id=None, prompt_version=None,
+            str(run_id),
+            GRAPH_ID,
+            THREAD_ID,
+            run_inputs="{}",
+            parent_run_id=None,
+            prompt_version=None,
         )
 
     async def test_on_chain_end_root_completes_run(self):
@@ -459,7 +467,9 @@ class TestLLMPayloadCapture:
         root_id = make_uuid()
         tool_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
-        cb.on_tool_start({"name": "search"}, '{"q": "hello"}', run_id=tool_id, parent_run_id=root_id, inputs={"q": "hello"})
+        cb.on_tool_start(
+            {"name": "search"}, '{"q": "hello"}', run_id=tool_id, parent_run_id=root_id, inputs={"q": "hello"}
+        )
         kwargs = db.insert_event.call_args.kwargs
         assert '"q"' in kwargs["payload"]["input"]
         assert "hello" in kwargs["payload"]["input"]
@@ -478,7 +488,9 @@ class TestLLMPayloadCapture:
         root_id = make_uuid()
         ret_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=root_id, parent_run_id=None)
-        cb.on_retriever_start({"id": ["pkg", "VectorStoreRetriever"]}, "what is RAG?", run_id=ret_id, parent_run_id=root_id)
+        cb.on_retriever_start(
+            {"id": ["pkg", "VectorStoreRetriever"]}, "what is RAG?", run_id=ret_id, parent_run_id=root_id
+        )
         kwargs = db.insert_event.call_args.kwargs
         assert kwargs["event_type"] == "retriever_start"
         assert kwargs["node_name"] == "VectorStoreRetriever"

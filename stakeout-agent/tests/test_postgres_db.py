@@ -301,9 +301,7 @@ class TestTableCreation:
             os.path.dirname(__file__),
             "../stakeout_agent/backends/migrations/versions",
         )
-        version_files = sorted(
-            f for f in os.listdir(versions_dir) if f.endswith(".py") and f != "__init__.py"
-        )
+        version_files = sorted(f for f in os.listdir(versions_dir) if f.endswith(".py") and f != "__init__.py")
         assert len(version_files) >= 3, "Expected at least 3 migration versions"
 
         revisions = {}
@@ -328,6 +326,7 @@ class TestTableCreation:
             if importlib.import_module(f"stakeout_agent.backends.migrations.versions.{f[:-3]}").revision == roots[0]
         )
         import inspect
+
         root_src = inspect.getsource(
             importlib.import_module(f"stakeout_agent.backends.migrations.versions.{root_mod_name}")
         )
