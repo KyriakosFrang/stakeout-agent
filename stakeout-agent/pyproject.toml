@@ -48,7 +48,7 @@ Repository = "https://github.com/KyriakosFrang/stakeout-agent"
 [project.optional-dependencies]
 langgraph = ["langchain-core>=0.3", "langgraph>=1.1.9"]
 mongodb = ["pymongo>=4.0"]
-postgres = ["psycopg2-binary>=2.9"]
+postgres = ["psycopg2-binary>=2.9", "alembic>=1.13", "sqlalchemy>=2.0"]
 crewai = ["crewai>=0.80"]
 otel = [
     "opentelemetry-sdk>=1.20",
