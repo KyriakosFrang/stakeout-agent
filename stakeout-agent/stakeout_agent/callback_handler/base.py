@@ -84,6 +84,8 @@ class _MonitorBase:
         token_extractor: Callable[[dict], tuple[int | None, int | None, str | None]] | None = None,
         capture_payloads: bool = True,
         max_payload_chars: int | None = None,
+        parent_run_id: str | None = None,
+        prompt_version: str | None = None,
     ):
         self.graph_id = graph_id
         self.thread_id = thread_id
@@ -96,6 +98,8 @@ class _MonitorBase:
         self._token_extractor = token_extractor or _default_token_extractor
         self.capture_payloads = capture_payloads
         self._max_payload_chars = max_payload_chars
+        self.parent_run_id = parent_run_id
+        self.prompt_version = prompt_version
         self._log = logging.LoggerAdapter(_logger, {"graph_id": graph_id, "thread_id": thread_id})
 
         self._state_lock = threading.Lock()
@@ -136,7 +140,23 @@ class _MonitorBase:
                 self._active_runs[run_id_str] = ctx
                 self._run_id_to_root[run_id_str] = run_id_str
             self._log.debug("run started run_id=%s", run_id_str)
-            self._safe_db_write(lambda: self.db.create_run(run_id_str, self.graph_id, self.thread_id))
+            run_inputs = (
+                self._safe_truncate(inputs, self._max_payload_chars or 5000)
+                if self.capture_payloads
+                else None
+            )
+            _parent = self.parent_run_id
+            _version = self.prompt_version
+            self._safe_db_write(
+                lambda: self.db.create_run(
+                    run_id_str,
+                    self.graph_id,
+                    self.thread_id,
+                    run_inputs=run_inputs,
+                    parent_run_id=_parent,
+                    prompt_version=_version,
+                )
+            )
         else:
             parent_run_id_str = str(parent_run_id)
             node_name = self._extract_name(serialized, kwargs)

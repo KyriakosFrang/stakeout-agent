@@ -104,20 +104,33 @@ class MongoMonitorDB(AbstractMonitorDB):
                 _log.error("%s failed: %s", op_name, exc)
                 return
 
-    def create_run(self, run_id: str, graph_id: str, thread_id: str) -> None:
+    def create_run(
+        self,
+        run_id: str,
+        graph_id: str,
+        thread_id: str,
+        run_inputs: str | None = None,
+        parent_run_id: str | None = None,
+        prompt_version: str | None = None,
+    ) -> None:
         def _op():
-            self._conn.runs.insert_one(
-                {
-                    "_id": run_id,
-                    "graph_id": graph_id,
-                    "thread_id": thread_id,
-                    "status": "running",
-                    "started_at": datetime.now(timezone.utc),
-                    "ended_at": None,
-                    "error": None,
-                    "metadata": {},
-                }
-            )
+            doc: dict = {
+                "_id": run_id,
+                "graph_id": graph_id,
+                "thread_id": thread_id,
+                "status": "running",
+                "started_at": datetime.now(timezone.utc),
+                "ended_at": None,
+                "error": None,
+                "metadata": {},
+            }
+            if run_inputs is not None:
+                doc["run_inputs"] = run_inputs
+            if parent_run_id is not None:
+                doc["parent_run_id"] = parent_run_id
+            if prompt_version is not None:
+                doc["prompt_version"] = prompt_version
+            self._conn.runs.insert_one(doc)
             _log.debug("create_run inserted run_id=%s graph_id=%s", run_id, graph_id)
 
         self._run_with_retry(f"create_run {run_id}", _op)

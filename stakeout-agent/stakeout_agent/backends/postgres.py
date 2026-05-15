@@ -90,15 +90,26 @@ class PostgresMonitorDB(AbstractMonitorDB):
                     _log.error("%s failed: %s", op_name, exc)
                     return
 
-    def create_run(self, run_id: str, graph_id: str, thread_id: str) -> None:
+    def create_run(
+        self,
+        run_id: str,
+        graph_id: str,
+        thread_id: str,
+        run_inputs: str | None = None,
+        parent_run_id: str | None = None,
+        prompt_version: str | None = None,
+    ) -> None:
         def _op():
             with self._connection.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO runs (run_id, graph_id, thread_id, status, started_at, ended_at, error)
-                    VALUES (%s, %s, %s, 'running', %s, NULL, NULL)
+                    INSERT INTO runs
+                        (run_id, graph_id, thread_id, status, started_at, ended_at, error,
+                         run_inputs, parent_run_id, prompt_version)
+                    VALUES (%s, %s, %s, 'running', %s, NULL, NULL, %s, %s, %s)
                     """,
-                    (run_id, graph_id, thread_id, datetime.now(timezone.utc)),
+                    (run_id, graph_id, thread_id, datetime.now(timezone.utc),
+                     run_inputs, parent_run_id, prompt_version),
                 )
             _log.debug("create_run inserted run_id=%s graph_id=%s", run_id, graph_id)
 

@@ -44,6 +44,8 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         token_extractor: Callable[[dict], tuple[int | None, int | None, str | None]] | None = None,
         capture_payloads: bool = True,
         max_payload_chars: int | None = None,
+        parent_run_id: str | None = None,
+        prompt_version: str | None = None,
     ):
         if LLMResult is None:
             raise ImportError(
@@ -59,6 +61,8 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
             token_extractor=token_extractor,
             capture_payloads=capture_payloads,
             max_payload_chars=max_payload_chars,
+            parent_run_id=parent_run_id,
+            prompt_version=prompt_version,
         )
         BaseCallbackHandler.__init__(self)
 
@@ -212,6 +216,8 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         token_extractor: Callable[[dict], tuple[int | None, int | None, str | None]] | None = None,
         capture_payloads: bool = True,
         max_payload_chars: int | None = None,
+        parent_run_id: str | None = None,
+        prompt_version: str | None = None,
     ):
         if LLMResult is None:
             raise ImportError(
@@ -227,6 +233,8 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
             token_extractor=token_extractor,
             capture_payloads=capture_payloads,
             max_payload_chars=max_payload_chars,
+            parent_run_id=parent_run_id,
+            prompt_version=prompt_version,
         )
         AsyncCallbackHandler.__init__(self)
 

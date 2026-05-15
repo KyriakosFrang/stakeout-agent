@@ -102,13 +102,19 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
         db: AbstractMonitorDB | None = None,
         capture_payloads: bool = True,
         max_payload_chars: int | None = None,
+        parent_run_id: str | None = None,
+        prompt_version: str | None = None,
     ) -> None:
         if CrewKickoffStartedEvent is None:
             raise ImportError(
                 "crewai is required for CrewAIMonitorCallback. Install it with: pip install 'stakeout-agent[crewai]'"
             )
         _MonitorBase.__init__(
-            self, crew_id, thread_id, db, capture_payloads=capture_payloads, max_payload_chars=max_payload_chars
+            self, crew_id, thread_id, db,
+            capture_payloads=capture_payloads,
+            max_payload_chars=max_payload_chars,
+            parent_run_id=parent_run_id,
+            prompt_version=prompt_version,
         )
         BaseEventListener.__init__(self)
 
@@ -124,7 +130,24 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             with self._state_lock:
                 self._active_runs[run_id] = ctx
             ctx_holder[0] = ctx
-            self._safe_db_write(lambda: self.db.create_run(run_id, self.graph_id, self.thread_id))
+            raw_inputs = getattr(event, "inputs", None)
+            run_inputs = (
+                self._safe_truncate(raw_inputs, self._max_payload_chars or 5000)
+                if self.capture_payloads and raw_inputs is not None
+                else None
+            )
+            _parent = self.parent_run_id
+            _version = self.prompt_version
+            self._safe_db_write(
+                lambda: self.db.create_run(
+                    run_id,
+                    self.graph_id,
+                    self.thread_id,
+                    run_inputs=run_inputs,
+                    parent_run_id=_parent,
+                    prompt_version=_version,
+                )
+            )
 
         @crewai_event_bus.on(CrewKickoffCompletedEvent)
         def on_crew_end(source: Any, event: CrewKickoffCompletedEvent) -> None:
@@ -325,6 +348,8 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
         db: AbstractMonitorDB | None = None,
         capture_payloads: bool = True,
         max_payload_chars: int | None = None,
+        parent_run_id: str | None = None,
+        prompt_version: str | None = None,
     ) -> None:
         if CrewKickoffStartedEvent is None:
             raise ImportError(
@@ -332,7 +357,11 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
                 "Install it with: pip install 'stakeout-agent[crewai]'"
             )
         _MonitorBase.__init__(
-            self, crew_id, thread_id, db, capture_payloads=capture_payloads, max_payload_chars=max_payload_chars
+            self, crew_id, thread_id, db,
+            capture_payloads=capture_payloads,
+            max_payload_chars=max_payload_chars,
+            parent_run_id=parent_run_id,
+            prompt_version=prompt_version,
         )
         BaseEventListener.__init__(self)
 
@@ -346,9 +375,27 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             with self._state_lock:
                 self._active_runs[run_id] = ctx
             ctx_holder[0] = ctx
+            raw_inputs = getattr(event, "inputs", None)
+            run_inputs = (
+                self._safe_truncate(raw_inputs, self._max_payload_chars or 5000)
+                if self.capture_payloads and raw_inputs is not None
+                else None
+            )
+            _parent = self.parent_run_id
+            _version = self.prompt_version
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
-                None, lambda: self._safe_db_write(lambda: self.db.create_run(run_id, self.graph_id, self.thread_id))
+                None,
+                lambda: self._safe_db_write(
+                    lambda: self.db.create_run(
+                        run_id,
+                        self.graph_id,
+                        self.thread_id,
+                        run_inputs=run_inputs,
+                        parent_run_id=_parent,
+                        prompt_version=_version,
+                    )
+                ),
             )
 
         @crewai_event_bus.on(CrewKickoffCompletedEvent)

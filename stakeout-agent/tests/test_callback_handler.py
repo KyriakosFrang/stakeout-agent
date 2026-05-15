@@ -165,7 +165,10 @@ class TestSyncCallback:
         cb, db = self._make()
         run_id = make_uuid()
         cb.on_chain_start({}, {}, run_id=run_id, parent_run_id=None)
-        db.create_run.assert_called_once_with(str(run_id), GRAPH_ID, THREAD_ID)
+        db.create_run.assert_called_once_with(
+            str(run_id), GRAPH_ID, THREAD_ID,
+            run_inputs="{}", parent_run_id=None, prompt_version=None,
+        )
         assert str(run_id) in cb._active_runs
 
     def test_on_chain_start_node_inserts_event(self):
@@ -291,7 +294,10 @@ class TestAsyncCallback:
         cb, db = self._make()
         run_id = make_uuid()
         await cb.on_chain_start({}, {}, run_id=run_id, parent_run_id=None)
-        db.create_run.assert_called_once_with(str(run_id), GRAPH_ID, THREAD_ID)
+        db.create_run.assert_called_once_with(
+            str(run_id), GRAPH_ID, THREAD_ID,
+            run_inputs="{}", parent_run_id=None, prompt_version=None,
+        )
 
     async def test_on_chain_end_root_completes_run(self):
         cb, db = self._make()

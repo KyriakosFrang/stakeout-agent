@@ -5,7 +5,15 @@ from abc import ABC, abstractmethod
 
 class AbstractMonitorDB(ABC):
     @abstractmethod
-    def create_run(self, run_id: str, graph_id: str, thread_id: str) -> None: ...
+    def create_run(
+        self,
+        run_id: str,
+        graph_id: str,
+        thread_id: str,
+        run_inputs: str | None = None,
+        parent_run_id: str | None = None,
+        prompt_version: str | None = None,
+    ) -> None: ...
 
     @abstractmethod
     def complete_run(

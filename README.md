@@ -311,6 +311,79 @@ Both options apply identically to `AsyncLangGraphMonitorCallback`, `CrewAIMonito
 
 ---
 
+## Run inputs, multi-agent linking, and prompt versioning
+
+Three optional constructor parameters extend what is stored on the `run` document. All three are framework-agnostic and work identically on `LangGraphMonitorCallback`, `AsyncLangGraphMonitorCallback`, `CrewAIMonitorCallback`, and `AsyncCrewAIMonitorCallback`.
+
+### Capture run inputs
+
+The initial inputs to `graph.invoke()` / `crew.kickoff()` are stored on the run document as `run_inputs`. This lets you replay, diff, and regression-test runs against their original inputs.
+
+```python
+monitor = LangGraphMonitorCallback(graph_id="my_graph", thread_id="thread_123")
+graph.invoke({"query": "Summarise Q1 results"}, config={"callbacks": [monitor]})
+# → run document includes run_inputs: '{"query": "Summarise Q1 results"}'
+```
+
+Capture is on by default when `capture_payloads=True` (the default). Set `capture_payloads=False` to suppress it, or `max_payload_chars=N` to cap the serialised size.
+
+### Multi-agent run linking
+
+When one agent invokes another, each produces a separate run with no connection by default. Pass `parent_run_id` to link child runs back to their parent:
+
+```python
+# Parent agent — record the root run id
+parent_monitor = LangGraphMonitorCallback(graph_id="orchestrator", thread_id="session_1")
+result = parent_graph.invoke(inputs, config={"callbacks": [parent_monitor]})
+parent_run_id = list(parent_monitor._active_runs.keys())[0]  # or pass via state
+
+# Child agent — link to the parent
+child_monitor = LangGraphMonitorCallback(
+    graph_id="researcher",
+    thread_id="session_1",
+    parent_run_id=parent_run_id,
+)
+child_graph.invoke(sub_inputs, config={"callbacks": [child_monitor]})
+```
+
+Both runs are stored independently. `parent_run_id` on the child run document is the only linkage — query the full tree by following `parent_run_id` references.
+
+### Prompt version tagging
+
+Tag every run with the prompt version in use. This lets you correlate quality or cost changes to specific prompt changes without any extra infrastructure:
+
+```python
+monitor = LangGraphMonitorCallback(
+    graph_id="my_graph",
+    thread_id="thread_123",
+    prompt_version="v2.1",
+)
+```
+
+Filter or group runs by `prompt_version` to compare latency, token usage, and error rates across prompt iterations:
+
+**MongoDB:**
+```python
+db.runs.aggregate([
+    {"$group": {
+        "_id": "$prompt_version",
+        "avg_tokens": {"$avg": "$total_input_tokens"},
+        "error_count": {"$sum": {"$cond": [{"$eq": ["$status", "failed"]}, 1, 0]}},
+    }}
+])
+```
+
+**PostgreSQL:**
+```sql
+SELECT prompt_version,
+       AVG(total_input_tokens) AS avg_input_tokens,
+       COUNT(*) FILTER (WHERE status = 'failed') AS error_count
+FROM runs
+GROUP BY prompt_version;
+```
+
+---
+
 ## Dashboard
 
 A dedicated dashboard repository is available at **[stakeout-dashboard](https://github.com/KyriakosFrang/stakeout-dashboard)** — a standalone Streamlit app that connects to your MongoDB or PostgreSQL backend and visualises everything stakeout-agent captures.
@@ -456,6 +529,9 @@ Each invocation produces a trace following [OpenTelemetry GenAI semantic convent
 | `estimated_cost_usd` | `stakeout.cost_usd` |
 | `llm_input` / `llm_output` | Span events `gen_ai.content.prompt` / `gen_ai.content.completion` (not attributes, to avoid collector size limits) |
 | `thread_id`, `graph_id`, `run_id` | `stakeout.thread_id`, `stakeout.graph_id`, `stakeout.run_id` on root span |
+| `run_inputs` | `stakeout.run_inputs` on root span |
+| `parent_run_id` | `stakeout.parent_run_id` on root span |
+| `prompt_version` | `stakeout.prompt_version` on root span |
 
 ---
 
@@ -474,6 +550,9 @@ One document per graph/crew invocation.
   "started_at": "2026-04-25T10:00:00Z",
   "ended_at": "2026-04-25T10:00:05Z",
   "error": null,
+  "run_inputs": "{\"query\": \"Summarise Q1 results\"}",
+  "parent_run_id": null,
+  "prompt_version": "v2.1",
   "total_input_tokens": 1850,
   "total_output_tokens": 420,
   "estimated_cost_usd": 0.01553,
@@ -482,7 +561,7 @@ One document per graph/crew invocation.
 }
 ```
 
-`status` is one of `running`, `completed`, or `failed`. Token and cost fields are omitted when no LLM usage data is available; `estimated_cost_usd` is omitted when no `pricing` map is configured.
+`status` is one of `running`, `completed`, or `failed`. Token and cost fields are omitted when no LLM usage data is available; `estimated_cost_usd` is omitted when no `pricing` map is configured. `run_inputs`, `parent_run_id`, and `prompt_version` are omitted when not provided or when `capture_payloads=False`.
 
 ### `events`
 
@@ -660,6 +739,9 @@ Select the `stakeout-agent` service (or whatever `OTEL_SERVICE_NAME` is set to) 
 - [x] Token usage tracking (per node and per run)
 - [x] Cost estimation with configurable pricing map
 - [x] Prompt and response capture per node (`capture_payloads`, `max_payload_chars`)
+- [x] Run input capture (`run_inputs` stored on the run document)
+- [x] Multi-agent run linking (`parent_run_id` constructor parameter)
+- [x] Prompt version tagging (`prompt_version` constructor parameter)
 - [x] [Dedicated UI dashboard](https://github.com/KyriakosFrang/stakeout-dashboard) (Run History, Node Performance, Run Inspector, Thread Deep Dive)
 - [ ] Additional agentic frameworks (PydanticAI, SemanticKernel, AutoGen etc.)
 - [ ] Additional storage backends (SQLite, Redis, …)
