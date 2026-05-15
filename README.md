@@ -128,7 +128,7 @@ pip install 'stakeout-agent[crewai,otel]'
 | `langgraph` | `langchain-core`, `langgraph` | Using LangGraph |
 | `crewai` | `crewai` | Using CrewAI |
 | `mongodb` | `pymongo` | Storing to MongoDB |
-| `postgres` | `psycopg2-binary` | Storing to PostgreSQL |
+| `postgres` | `psycopg2-binary`, `alembic`, `sqlalchemy` | Storing to PostgreSQL |
 | `otel` | `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc` | Exporting to any OTEL-compatible collector |
 
 Requires Python 3.10+.
@@ -381,7 +381,7 @@ export STAKEOUT_BACKEND=postgres
 export POSTGRES_URI=postgresql://user:password@localhost/stakeout
 ```
 
-Tables are created automatically on first connection — no migration needed. New columns (`llm_input`, `llm_output`, token and cost fields) are added to existing tables via `ALTER TABLE … ADD COLUMN IF NOT EXISTS`.
+Schema migrations are managed with [Alembic](https://alembic.sqlalchemy.org/) and run automatically on first connection. Versioned migration files live under `stakeout_agent/backends/migrations/versions/` — each schema change is a numbered revision with `upgrade()` and `downgrade()`. Alembic records applied revisions in an `alembic_version` table, so only new migrations run on reconnect. To add a column, create a new revision rather than appending an `ALTER TABLE` to shared SQL.
 
 ```bash
 docker compose up -d postgres
