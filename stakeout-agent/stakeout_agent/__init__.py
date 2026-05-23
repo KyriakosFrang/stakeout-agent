@@ -24,6 +24,7 @@ try:
 except ImportError:
     pass
 
+from stakeout_agent.alerts import AlertManager, Rule
 from stakeout_agent.pricing import ModelPricing, PricingMap
 from stakeout_agent.writer import BufferedWriter
 
@@ -37,4 +38,6 @@ __all__ = [
     "ModelPricing",
     "PricingMap",
     "BufferedWriter",
+    "AlertManager",
+    "Rule",
 ]

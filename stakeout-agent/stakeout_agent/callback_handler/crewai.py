@@ -37,6 +37,7 @@ except ImportError:
     ToolUsageFinishedEvent = None  # type: ignore[assignment,misc]
     ToolUsageStartedEvent = None  # type: ignore[assignment,misc]
 
+from stakeout_agent.alerts import AlertManager
 from stakeout_agent.backends.base import AbstractMonitorDB
 from stakeout_agent.callback_handler.base import _MonitorBase, _RunContext
 
@@ -104,6 +105,7 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
         max_payload_chars: int | None = None,
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
+        alert_manager: AlertManager | None = None,
     ) -> None:
         if CrewKickoffStartedEvent is None:
             raise ImportError(
@@ -118,6 +120,7 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             max_payload_chars=max_payload_chars,
             parent_run_id=parent_run_id,
             prompt_version=prompt_version,
+            alert_manager=alert_manager,
         )
         BaseEventListener.__init__(self)
 
@@ -160,9 +163,20 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
                 with self._state_lock:
                     self._active_runs.pop(ctx.run_id, None)
                 run_id = ctx.run_id
+                run_latency_ms = round((time.monotonic() - ctx.run_start_time) * 1000, 2)
+                cost = ctx.total_cost
             else:
                 run_id = None
+                run_latency_ms = None
+                cost = None
             self._safe_db_write(lambda: self.db.complete_run(run_id))
+            if self._alert_manager is not None:
+                self._alert_manager.record_and_evaluate(
+                    status="completed",
+                    latency_ms=run_latency_ms,
+                    cost=cost,
+                    graph_id=self.graph_id,
+                )
 
         @crewai_event_bus.on(CrewKickoffFailedEvent)
         def on_crew_error(source: Any, event: CrewKickoffFailedEvent) -> None:
@@ -172,10 +186,19 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
                 with self._state_lock:
                     self._active_runs.pop(ctx.run_id, None)
                 run_id = ctx.run_id
+                run_latency_ms = round((time.monotonic() - ctx.run_start_time) * 1000, 2)
             else:
                 run_id = None
+                run_latency_ms = None
             error_str = self._safe_truncate(event.error)
             self._safe_db_write(lambda: self.db.fail_run(run_id, error_str))
+            if self._alert_manager is not None:
+                self._alert_manager.record_and_evaluate(
+                    status="failed",
+                    latency_ms=run_latency_ms,
+                    cost=None,
+                    graph_id=self.graph_id,
+                )
 
         @crewai_event_bus.on(TaskStartedEvent)
         def on_task_start(source: Any, event: TaskStartedEvent) -> None:
@@ -353,6 +376,7 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
         max_payload_chars: int | None = None,
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
+        alert_manager: AlertManager | None = None,
     ) -> None:
         if CrewKickoffStartedEvent is None:
             raise ImportError(
@@ -368,6 +392,7 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             max_payload_chars=max_payload_chars,
             parent_run_id=parent_run_id,
             prompt_version=prompt_version,
+            alert_manager=alert_manager,
         )
         BaseEventListener.__init__(self)
 
@@ -412,10 +437,24 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
                 with self._state_lock:
                     self._active_runs.pop(ctx.run_id, None)
                 run_id = ctx.run_id
+                run_latency_ms = round((time.monotonic() - ctx.run_start_time) * 1000, 2)
+                cost = ctx.total_cost
             else:
                 run_id = None
+                run_latency_ms = None
+                cost = None
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, lambda: self._safe_db_write(lambda: self.db.complete_run(run_id)))
+            if self._alert_manager is not None:
+                await loop.run_in_executor(
+                    None,
+                    lambda: self._alert_manager.record_and_evaluate(
+                        status="completed",
+                        latency_ms=run_latency_ms,
+                        cost=cost,
+                        graph_id=self.graph_id,
+                    ),
+                )
 
         @crewai_event_bus.on(CrewKickoffFailedEvent)
         async def on_crew_error(source: Any, event: CrewKickoffFailedEvent) -> None:
@@ -425,11 +464,23 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
                 with self._state_lock:
                     self._active_runs.pop(ctx.run_id, None)
                 run_id = ctx.run_id
+                run_latency_ms = round((time.monotonic() - ctx.run_start_time) * 1000, 2)
             else:
                 run_id = None
+                run_latency_ms = None
             error_str = self._safe_truncate(event.error)
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, lambda: self._safe_db_write(lambda: self.db.fail_run(run_id, error_str)))
+            if self._alert_manager is not None:
+                await loop.run_in_executor(
+                    None,
+                    lambda: self._alert_manager.record_and_evaluate(
+                        status="failed",
+                        latency_ms=run_latency_ms,
+                        cost=None,
+                        graph_id=self.graph_id,
+                    ),
+                )
 
         @crewai_event_bus.on(TaskStartedEvent)
         async def on_task_start(source: Any, event: TaskStartedEvent) -> None:
