@@ -844,7 +844,7 @@ Agent: "This week's runs averaged $0.42 each and p95 latency is 12 s.
         Should I proceed with the full report or use the summary pipeline?"
 ```
 
-A full working example is in [`examples/mcp_langgraph_example.py`](examples/mcp_langgraph_example.py).
+A full working example is in [`examples/mcp_langgraph_example.py`](https://github.com/KyriakosFrang/stakeout-agent/blob/main/stakeout-agent/examples/mcp_langgraph_example.py).
 
 ---
 
