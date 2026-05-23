@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-   One callback. Every run, node, tool call, token count, prompt, and response — captured automatically into MongoDB, PostgreSQL, or any OpenTelemetry-compatible collector. Sliding-window alerts fire to Slack, PagerDuty, or any webhook the moment error rates or latency spike. No changes to your agent code.
+   One callback. Every run, node, tool call, token count, prompt, and response — captured automatically into MongoDB, PostgreSQL, or any OpenTelemetry-compatible collector. Sliding-window alerts fire to Slack, PagerDuty, or any webhook the moment error rates or latency spike. An MCP server lets agents query their own run history at runtime. No changes to your agent code.
 </p>
 
 <p align="center">
@@ -54,6 +54,9 @@ pip install 'stakeout-agent[crewai,postgres]'
 
 # CrewAI + OpenTelemetry
 pip install 'stakeout-agent[crewai,otel]'
+
+# MCP server (expose run history to any MCP-aware agent)
+pip install 'stakeout-agent[mcp]'
 ```
 
 ```python
@@ -77,9 +80,12 @@ graph LR
     C --> E[Dashboard / your queries]
     D --> E
     F --> G[Jaeger / Datadog / Grafana / Honeycomb]
+    C --> H[MCP Server]
+    D --> H
+    H -->|tools & resources| A
 ```
 
-stakeout-agent hooks into your framework's event system. It records a `run` document for each invocation and an `event` document for every node start/end, tool call, tool result, and error — with latency, token usage, and the actual prompts and responses captured at every step.
+stakeout-agent hooks into your framework's event system. It records a `run` document for each invocation and an `event` document for every node start/end, tool call, tool result, and error — with latency, token usage, and the actual prompts and responses captured at every step. The optional MCP server feeds that history back to your agents as callable tools, closing the loop between monitoring and reasoning.
 
 ---
 
@@ -95,6 +101,7 @@ stakeout-agent hooks into your framework's event system. It records a `run` docu
 | Prompt & response capture | **Yes** — per node, opt-out, truncation supported |
 | Non-blocking writes | **Yes** — opt-in `BufferedWriter` keeps DB I/O off the LLM hot path |
 | Sliding-window alerting | **Yes** — error rate, P95/P99 latency, cost; webhook to Slack, PagerDuty, etc. |
+| MCP server | **Yes** — agents query their own run history at runtime via standard MCP tools |
 | Frameworks | **LangGraph + CrewAI** |
 | Backends | **MongoDB + PostgreSQL + OpenTelemetry** |
 | Dashboard included | **Yes** — [dedicated real-time observability UI](https://github.com/KyriakosFrang/stakeout-dashboard) |
@@ -132,6 +139,7 @@ pip install 'stakeout-agent[crewai,otel]'
 | `mongodb` | `pymongo` | Storing to MongoDB |
 | `postgres` | `psycopg2-binary`, `alembic`, `sqlalchemy` | Storing to PostgreSQL |
 | `otel` | `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc` | Exporting to any OTEL-compatible collector |
+| `mcp` | `mcp`, `uvicorn` | Running the MCP server so agents can query run history |
 
 Requires Python 3.10+.
 
@@ -731,6 +739,112 @@ The webhook fires a `POST` with `Content-Type: application/json`. The payload is
 ### Failure handling
 
 Webhook delivery failures are logged at `WARNING` and never raised into the callback or affect run recording. A monitoring failure cannot crash your application.
+
+---
+
+## MCP server
+
+The `stakeout-agent[mcp]` extra ships a [Model Context Protocol](https://modelcontextprotocol.io) server that exposes your run history as callable tools and browsable resources. Any MCP-aware agent — ChatGPT, Claude, a LangGraph agent with MCP tool nodes, AutoGen — can call these tools as part of its reasoning loop to detect repeated failures, surface cost metrics, or adjust its strategy based on what went wrong before.
+
+This is a capability no existing monitoring library provides: trace data fed back to the agent at runtime, not just to a human dashboard.
+
+### Install
+
+```bash
+pip install 'stakeout-agent[mcp]'
+```
+
+The extra brings in `mcp` (the MCP Python SDK) and `uvicorn` for HTTP transports. You also need at least one storage backend:
+
+```bash
+pip install 'stakeout-agent[mcp,mongodb]'   # MongoDB
+pip install 'stakeout-agent[mcp,postgres]'  # PostgreSQL
+```
+
+### Start the server
+
+The `stakeout mcp` CLI command is registered automatically when the package is installed. Point it at your backend via environment variables and choose a transport:
+
+```bash
+# stdio — for Claude Desktop, Claude Code, and local development
+MONGO_URI=mongodb://localhost:27017 stakeout mcp --transport stdio
+
+# SSE — for LangGraph agents and remote MCP clients
+MONGO_URI=mongodb://localhost:27017 stakeout mcp --transport sse --host 127.0.0.1 --port 8001
+
+# Streamable HTTP — for production deployments behind a reverse proxy
+POSTGRES_URI=postgresql://user:pass@localhost/stakeout stakeout mcp --transport streamable-http --port 8001
+```
+
+The backend is auto-detected: `MONGO_URI` selects MongoDB; `POSTGRES_URI` or `DATABASE_URL` selects PostgreSQL. The server exits with a clear error if neither is set.
+
+#### Optional bearer-token auth
+
+Set `STAKEOUT_MCP_TOKEN` to require a bearer token on all SSE and streamable-HTTP requests. stdio transport is local-only and does not require auth.
+
+```bash
+MONGO_URI=mongodb://localhost:27017 STAKEOUT_MCP_TOKEN=mysecret stakeout mcp --transport sse --port 8001
+```
+
+Clients must then send `Authorization: Bearer mysecret` with every request.
+
+### Connect an agent
+
+#### LangGraph agent (SSE)
+
+```python
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+client = MultiServerMCPClient({
+    "stakeout": {
+        "url": "http://127.0.0.1:8001/sse",
+        "transport": "sse",
+    }
+})
+tools = await client.get_tools()
+# pass `tools` to your LangGraph agent's tool node
+```
+
+### Exposed tools
+
+| Tool | Description |
+|---|---|
+| `get_recent_runs` | Return the N most recent runs, optionally filtered by `graph_id` |
+| `get_run_detail` | Return the full event trace for a specific `run_id` |
+| `get_failed_runs` | Return failed runs within a time window, with error messages |
+| `get_slow_runs` | Return runs that exceeded a latency threshold |
+| `get_run_stats` | Aggregate stats: error rate, p50/p95 latency, total cost |
+| `search_runs_by_output` | Case-insensitive search across captured run inputs |
+
+All tools accept an optional `graph_id` parameter to scope results to a specific agent. Time windows are expressed in hours or days from the current moment so the agent does not need to know the current timestamp.
+
+### Exposed resources
+
+Resources are browsable MCP content — clients can list and read them without making a tool call:
+
+| URI | Content |
+|---|---|
+| `stakeout://runs` | JSON list of the 20 most recent runs across all graphs |
+| `stakeout://runs/{run_id}` | Full trace (run document + all events) for a specific run |
+| `stakeout://graphs/{graph_id}/stats` | Aggregate stats for a graph over the last 7 days |
+
+### Example: agent that avoids repeating failures
+
+```
+Agent: [calls get_failed_runs(graph_id="research-agent", last_n_hours=1)]
+Tool:  [returns 3 failed runs, all failing at "web_search" node with "rate limit" error]
+Agent: "I've hit rate limits 3 times in the last hour on web_search.
+        I'll use the cached knowledge base instead."
+```
+
+```
+Agent: [calls get_run_stats(graph_id="report-generator", last_n_days=7)]
+Tool:  [returns avg_cost_usd=0.42, p95_latency_ms=12000, error_rate=0.03]
+Agent: "This week's runs averaged $0.42 each and p95 latency is 12 s.
+        Should I proceed with the full report or use the summary pipeline?"
+```
+
+A full working example is in [`examples/mcp_langgraph_example.py`](examples/mcp_langgraph_example.py).
 
 ---
 

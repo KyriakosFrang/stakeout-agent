@@ -54,6 +54,13 @@ otel = [
     "opentelemetry-sdk>=1.20",
     "opentelemetry-exporter-otlp-proto-grpc>=1.20",
 ]
+mcp = [
+    "mcp>=1.0",
+    "uvicorn>=0.27",
+]
+
+[project.scripts]
+stakeout = "stakeout_agent.mcp.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["stakeout_agent"]
