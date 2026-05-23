@@ -1,5 +1,6 @@
 import logging
 import os
+import statistics
 import threading
 import time
 from datetime import datetime, timezone
@@ -20,7 +21,7 @@ except ImportError:
         pass
 
 
-from stakeout_agent.backends.base import AbstractMonitorDB
+from stakeout_agent.backends.base import AbstractMonitorDB, AbstractQueryDB
 
 _log = logging.getLogger(__name__)
 
@@ -55,7 +56,76 @@ def _make_client():
     return db
 
 
-class MongoMonitorDB(AbstractMonitorDB):
+_RUN_PROJECTION = {
+    "_id": 1,
+    "graph_id": 1,
+    "thread_id": 1,
+    "status": 1,
+    "started_at": 1,
+    "ended_at": 1,
+    "error": 1,
+    "run_inputs": 1,
+    "parent_run_id": 1,
+    "prompt_version": 1,
+    "total_input_tokens": 1,
+    "total_output_tokens": 1,
+    "estimated_cost_usd": 1,
+    "total_cache_read_tokens": 1,
+    "total_cache_creation_tokens": 1,
+}
+
+_EVENT_PROJECTION = {
+    "_id": 0,
+    "run_id": 1,
+    "graph_id": 1,
+    "event_type": 1,
+    "node_name": 1,
+    "latency_ms": 1,
+    "timestamp": 1,
+    "error": 1,
+    "input_tokens": 1,
+    "output_tokens": 1,
+    "model": 1,
+    "llm_output": 1,
+    "cache_read_tokens": 1,
+    "cache_creation_tokens": 1,
+}
+
+
+def _run_latency_ms(doc: dict) -> float | None:
+    started = doc.get("started_at")
+    ended = doc.get("ended_at")
+    if started and ended:
+        return (ended - started).total_seconds() * 1000
+    return None
+
+
+def _ser_run(doc: dict) -> dict:
+    out: dict = {k: v for k, v in doc.items()}
+    out["run_id"] = str(out.pop("_id"))
+    for field in ("started_at", "ended_at"):
+        if out.get(field) is not None:
+            out[field] = out[field].isoformat()
+    out["latency_ms"] = _run_latency_ms(doc)
+    return out
+
+
+def _ser_event(doc: dict) -> dict:
+    out = {k: v for k, v in doc.items()}
+    if out.get("timestamp") is not None:
+        out["timestamp"] = out["timestamp"].isoformat()
+    return out
+
+
+def _percentile(values: list[float], p: int) -> float | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    return statistics.quantiles(values, n=100)[p - 1]
+
+
+class MongoMonitorDB(AbstractMonitorDB, AbstractQueryDB):
     def __init__(self):
         self._db = None
         self._lock = threading.Lock()
@@ -227,3 +297,64 @@ class MongoMonitorDB(AbstractMonitorDB):
             _log.debug("insert_event event_type=%s node=%s run_id=%s", event_type, node_name, run_id)
 
         self._run_with_retry(f"insert_event {run_id}", _op)
+
+    # ------------------------------------------------------------------
+    # AbstractQueryDB
+    # ------------------------------------------------------------------
+
+    def query_recent_runs(self, graph_id: str | None, limit: int) -> list[dict]:
+        query: dict = {}
+        if graph_id:
+            query["graph_id"] = graph_id
+        cursor = self._conn.runs.find(query, _RUN_PROJECTION).sort("started_at", DESCENDING).limit(limit)
+        return [_ser_run(doc) for doc in cursor]
+
+    def query_run_detail(self, run_id: str) -> dict | None:
+        run_doc = self._conn.runs.find_one({"_id": run_id}, _RUN_PROJECTION)
+        if run_doc is None:
+            return None
+        events = list(self._conn.events.find({"run_id": run_id}, _EVENT_PROJECTION).sort("timestamp", 1))
+        return {"run": _ser_run(run_doc), "events": [_ser_event(e) for e in events]}
+
+    def query_failed_runs(self, graph_id: str | None, since_ts: float) -> list[dict]:
+        since_dt = datetime.fromtimestamp(since_ts, tz=timezone.utc)
+        query: dict = {"status": "failed", "started_at": {"$gte": since_dt}}
+        if graph_id:
+            query["graph_id"] = graph_id
+        cursor = self._conn.runs.find(query, _RUN_PROJECTION).sort("started_at", DESCENDING)
+        return [_ser_run(doc) for doc in cursor]
+
+    def query_slow_runs(self, graph_id: str | None, threshold_ms: float, since_ts: float) -> list[dict]:
+        since_dt = datetime.fromtimestamp(since_ts, tz=timezone.utc)
+        query: dict = {"status": "completed", "started_at": {"$gte": since_dt}, "ended_at": {"$ne": None}}
+        if graph_id:
+            query["graph_id"] = graph_id
+        cursor = self._conn.runs.find(query, _RUN_PROJECTION).sort("started_at", DESCENDING)
+        return [_ser_run(doc) for doc in cursor if (_run_latency_ms(doc) or 0) > threshold_ms]
+
+    def query_run_stats(self, graph_id: str | None, since_ts: float) -> dict:
+        since_dt = datetime.fromtimestamp(since_ts, tz=timezone.utc)
+        query: dict = {"started_at": {"$gte": since_dt}}
+        if graph_id:
+            query["graph_id"] = graph_id
+        docs = list(self._conn.runs.find(query, _RUN_PROJECTION))
+        total = len(docs)
+        failed = sum(1 for d in docs if d.get("status") == "failed")
+        latencies = [ms for d in docs if (ms := _run_latency_ms(d)) is not None]
+        costs = [c for d in docs if (c := d.get("estimated_cost_usd")) is not None]
+        return {
+            "graph_id": graph_id,
+            "run_count": total,
+            "error_rate": (failed / total) if total else None,
+            "p50_latency_ms": _percentile(latencies, 50),
+            "p95_latency_ms": _percentile(latencies, 95),
+            "total_cost_usd": sum(costs) if costs else None,
+            "avg_cost_usd": (sum(costs) / len(costs)) if costs else None,
+        }
+
+    def query_runs_by_output(self, graph_id: str | None, text: str, limit: int) -> list[dict]:
+        query: dict = {"run_inputs": {"$regex": text, "$options": "i"}}
+        if graph_id:
+            query["graph_id"] = graph_id
+        cursor = self._conn.runs.find(query, _RUN_PROJECTION).sort("started_at", DESCENDING).limit(limit)
+        return [_ser_run(doc) for doc in cursor]

@@ -3,6 +3,43 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 
+class AbstractQueryDB(ABC):
+    """Read-only query interface implemented by persistent backends (MongoDB, Postgres).
+
+    The OTEL backend has no storage of its own and does not implement this.
+    """
+
+    @abstractmethod
+    def query_recent_runs(self, graph_id: str | None, limit: int) -> list[dict]:
+        """Return the *limit* most-recent runs, optionally filtered by graph_id."""
+        ...
+
+    @abstractmethod
+    def query_run_detail(self, run_id: str) -> dict | None:
+        """Return a run document plus all its events, or None if not found."""
+        ...
+
+    @abstractmethod
+    def query_failed_runs(self, graph_id: str | None, since_ts: float) -> list[dict]:
+        """Return failed runs with started_at >= since_ts (Unix timestamp)."""
+        ...
+
+    @abstractmethod
+    def query_slow_runs(self, graph_id: str | None, threshold_ms: float, since_ts: float) -> list[dict]:
+        """Return completed runs whose wall-clock duration exceeds threshold_ms."""
+        ...
+
+    @abstractmethod
+    def query_run_stats(self, graph_id: str | None, since_ts: float) -> dict:
+        """Return aggregate stats (error_rate, p50/p95 latency, cost) since since_ts."""
+        ...
+
+    @abstractmethod
+    def query_runs_by_output(self, graph_id: str | None, text: str, limit: int) -> list[dict]:
+        """Return runs whose run_inputs field contains *text* (case-insensitive)."""
+        ...
+
+
 class AbstractMonitorDB(ABC):
     @abstractmethod
     def create_run(

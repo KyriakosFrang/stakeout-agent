@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "stakeout-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Drop-in observability for LangGraph and CrewAI — captures every run, node, tool call, token count, prompt, and response into MongoDB, PostgreSQL, or any OpenTelemetry-compatible collector"
 readme = "README.md"
 license = { text = "MIT" }
@@ -54,6 +54,13 @@ otel = [
     "opentelemetry-sdk>=1.20",
     "opentelemetry-exporter-otlp-proto-grpc>=1.20",
 ]
+mcp = [
+    "mcp>=1.0",
+    "uvicorn>=0.27",
+]
+
+[project.scripts]
+stakeout = "stakeout_agent.mcp.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["stakeout_agent"]

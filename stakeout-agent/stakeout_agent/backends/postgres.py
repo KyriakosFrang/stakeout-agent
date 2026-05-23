@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import statistics
 import threading
 import time
 from datetime import datetime, timezone
 
-from stakeout_agent.backends.base import AbstractMonitorDB
+from stakeout_agent.backends.base import AbstractMonitorDB, AbstractQueryDB
 
 _log = logging.getLogger(__name__)
 
@@ -44,7 +45,53 @@ def _make_pg_conn():
     return conn
 
 
-class PostgresMonitorDB(AbstractMonitorDB):
+_RUN_COLS = (
+    "run_id", "graph_id", "thread_id", "status", "started_at", "ended_at", "error",
+    "run_inputs", "parent_run_id", "prompt_version",
+    "total_input_tokens", "total_output_tokens", "estimated_cost_usd",
+    "total_cache_read_tokens", "total_cache_creation_tokens",
+)
+
+_EVENT_COLS = (
+    "run_id", "graph_id", "event_type", "node_name", "latency_ms",
+    "timestamp", "error", "input_tokens", "output_tokens", "model",
+    "llm_output", "cache_read_tokens", "cache_creation_tokens",
+)
+
+_RUN_SELECT = f"SELECT {', '.join(_RUN_COLS)} FROM runs"
+_EVENT_SELECT = f"SELECT {', '.join(_EVENT_COLS)} FROM events"
+
+
+def _row_to_run(cols: tuple, row: tuple) -> dict:
+    d = dict(zip(cols, row))
+    for field in ("started_at", "ended_at"):
+        if d.get(field) is not None:
+            d[field] = d[field].isoformat()
+    started = row[cols.index("started_at")] if "started_at" in cols else None
+    ended = row[cols.index("ended_at")] if "ended_at" in cols else None
+    if started and ended:
+        d["latency_ms"] = (ended - started).total_seconds() * 1000
+    else:
+        d["latency_ms"] = None
+    return d
+
+
+def _row_to_event(cols: tuple, row: tuple) -> dict:
+    d = dict(zip(cols, row))
+    if d.get("timestamp") is not None:
+        d["timestamp"] = d["timestamp"].isoformat()
+    return d
+
+
+def _percentile(values: list[float], p: int) -> float | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    return statistics.quantiles(values, n=100)[p - 1]
+
+
+class PostgresMonitorDB(AbstractMonitorDB, AbstractQueryDB):
     def __init__(self):
         self._conn = None
         self._lock = threading.Lock()
@@ -223,3 +270,103 @@ class PostgresMonitorDB(AbstractMonitorDB):
             _log.debug("insert_event event_type=%s node=%s run_id=%s", event_type, node_name, run_id)
 
         self._run_with_retry(f"insert_event {run_id}", _op)
+
+    # ------------------------------------------------------------------
+    # AbstractQueryDB
+    # ------------------------------------------------------------------
+
+    def query_recent_runs(self, graph_id: str | None, limit: int) -> list[dict]:
+        with self._connection.cursor() as cur:
+            if graph_id:
+                cur.execute(f"{_RUN_SELECT} WHERE graph_id = %s ORDER BY started_at DESC LIMIT %s", (graph_id, limit))
+            else:
+                cur.execute(f"{_RUN_SELECT} ORDER BY started_at DESC LIMIT %s", (limit,))
+            cols = tuple(d.name for d in cur.description)
+            return [_row_to_run(cols, row) for row in cur.fetchall()]
+
+    def query_run_detail(self, run_id: str) -> dict | None:
+        with self._connection.cursor() as cur:
+            cur.execute(f"{_RUN_SELECT} WHERE run_id = %s", (run_id,))
+            run_row = cur.fetchone()
+            if run_row is None:
+                return None
+            run_cols = tuple(d.name for d in cur.description)
+            cur.execute(f"{_EVENT_SELECT} WHERE run_id = %s ORDER BY timestamp ASC", (run_id,))
+            evt_cols = tuple(d.name for d in cur.description)
+            events = [_row_to_event(evt_cols, row) for row in cur.fetchall()]
+        return {"run": _row_to_run(run_cols, run_row), "events": events}
+
+    def query_failed_runs(self, graph_id: str | None, since_ts: float) -> list[dict]:
+        since_dt = datetime.fromtimestamp(since_ts, tz=timezone.utc)
+        with self._connection.cursor() as cur:
+            if graph_id:
+                cur.execute(
+                    f"{_RUN_SELECT} WHERE status = 'failed' AND started_at >= %s"
+                    f" AND graph_id = %s ORDER BY started_at DESC",
+                    (since_dt, graph_id),
+                )
+            else:
+                cur.execute(
+                    f"{_RUN_SELECT} WHERE status = 'failed' AND started_at >= %s ORDER BY started_at DESC",
+                    (since_dt,),
+                )
+            cols = tuple(d.name for d in cur.description)
+            return [_row_to_run(cols, row) for row in cur.fetchall()]
+
+    def query_slow_runs(self, graph_id: str | None, threshold_ms: float, since_ts: float) -> list[dict]:
+        since_dt = datetime.fromtimestamp(since_ts, tz=timezone.utc)
+        threshold_s = threshold_ms / 1000.0
+        with self._connection.cursor() as cur:
+            if graph_id:
+                cur.execute(
+                    f"{_RUN_SELECT} WHERE status = 'completed' AND started_at >= %s AND ended_at IS NOT NULL"
+                    f" AND EXTRACT(EPOCH FROM (ended_at - started_at)) > %s AND graph_id = %s ORDER BY started_at DESC",
+                    (since_dt, threshold_s, graph_id),
+                )
+            else:
+                cur.execute(
+                    f"{_RUN_SELECT} WHERE status = 'completed' AND started_at >= %s AND ended_at IS NOT NULL"
+                    f" AND EXTRACT(EPOCH FROM (ended_at - started_at)) > %s ORDER BY started_at DESC",
+                    (since_dt, threshold_s),
+                )
+            cols = tuple(d.name for d in cur.description)
+            return [_row_to_run(cols, row) for row in cur.fetchall()]
+
+    def query_run_stats(self, graph_id: str | None, since_ts: float) -> dict:
+        since_dt = datetime.fromtimestamp(since_ts, tz=timezone.utc)
+        with self._connection.cursor() as cur:
+            if graph_id:
+                cur.execute(f"{_RUN_SELECT} WHERE started_at >= %s AND graph_id = %s", (since_dt, graph_id))
+            else:
+                cur.execute(f"{_RUN_SELECT} WHERE started_at >= %s", (since_dt,))
+            cols = tuple(d.name for d in cur.description)
+            rows = [_row_to_run(cols, row) for row in cur.fetchall()]
+
+        total = len(rows)
+        failed = sum(1 for r in rows if r.get("status") == "failed")
+        latencies = [ms for r in rows if (ms := r.get("latency_ms")) is not None]
+        costs = [c for r in rows if (c := r.get("estimated_cost_usd")) is not None]
+        return {
+            "graph_id": graph_id,
+            "run_count": total,
+            "error_rate": (failed / total) if total else None,
+            "p50_latency_ms": _percentile(latencies, 50),
+            "p95_latency_ms": _percentile(latencies, 95),
+            "total_cost_usd": sum(costs) if costs else None,
+            "avg_cost_usd": (sum(costs) / len(costs)) if costs else None,
+        }
+
+    def query_runs_by_output(self, graph_id: str | None, text: str, limit: int) -> list[dict]:
+        with self._connection.cursor() as cur:
+            if graph_id:
+                cur.execute(
+                    f"{_RUN_SELECT} WHERE run_inputs ILIKE %s AND graph_id = %s ORDER BY started_at DESC LIMIT %s",
+                    (f"%{text}%", graph_id, limit),
+                )
+            else:
+                cur.execute(
+                    f"{_RUN_SELECT} WHERE run_inputs ILIKE %s ORDER BY started_at DESC LIMIT %s",
+                    (f"%{text}%", limit),
+                )
+            cols = tuple(d.name for d in cur.description)
+            return [_row_to_run(cols, row) for row in cur.fetchall()]
