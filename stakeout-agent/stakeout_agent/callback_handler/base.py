@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
+from stakeout_agent.alerts import AlertManager
 from stakeout_agent.backends.base import AbstractMonitorDB
 
 _logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class _RunContext:
     """Holds all mutable state for a single graph invocation."""
 
     run_id: str
+    run_start_time: float = dataclasses.field(default_factory=time.monotonic)
     node_start_times: dict[str, float] = dataclasses.field(default_factory=dict)
     node_names: dict[str, str] = dataclasses.field(default_factory=dict)
     tool_start_times: dict[str, float] = dataclasses.field(default_factory=dict)
@@ -86,6 +88,7 @@ class _MonitorBase:
         max_payload_chars: int | None = None,
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
+        alert_manager: AlertManager | None = None,
     ):
         self.graph_id = graph_id
         self.thread_id = thread_id
@@ -100,6 +103,7 @@ class _MonitorBase:
         self._max_payload_chars = max_payload_chars
         self.parent_run_id = parent_run_id
         self.prompt_version = prompt_version
+        self._alert_manager = alert_manager
         self._log = logging.LoggerAdapter(_logger, {"graph_id": graph_id, "thread_id": thread_id})
 
         self._state_lock = threading.Lock()
@@ -225,8 +229,10 @@ class _MonitorBase:
                 total_cr = ctx.total_cache_read_tokens or None
                 total_cc = ctx.total_cache_creation_tokens or None
                 cost = ctx.total_cost
+                run_latency_ms = round((time.monotonic() - ctx.run_start_time) * 1000, 2)
             else:
                 total_in = total_out = total_cr = total_cc = cost = None
+                run_latency_ms = None
             self._log.debug("run completed run_id=%s", run_id_str)
             self._safe_db_write(
                 lambda: self.db.complete_run(
@@ -238,6 +244,13 @@ class _MonitorBase:
                     total_cache_creation_tokens=total_cc,
                 )
             )
+            if self._alert_manager is not None:
+                self._alert_manager.record_and_evaluate(
+                    status="completed",
+                    latency_ms=run_latency_ms,
+                    cost=cost,
+                    graph_id=self.graph_id,
+                )
         else:
             with self._state_lock:
                 root_id = self._run_id_to_root.pop(run_id_str, None)
@@ -292,10 +305,18 @@ class _MonitorBase:
         error_str = f"{type(error).__name__}: {str(error)}"
         if parent_run_id is None:
             with self._state_lock:
-                self._active_runs.pop(run_id_str, None)
+                ctx = self._active_runs.pop(run_id_str, None)
                 self._run_id_to_root.pop(run_id_str, None)
+            run_latency_ms = round((time.monotonic() - ctx.run_start_time) * 1000, 2) if ctx else None
             self._log.warning("run failed run_id=%s error=%s", run_id_str, error_str)
             self._safe_db_write(lambda: self.db.fail_run(run_id_str, error_str))
+            if self._alert_manager is not None:
+                self._alert_manager.record_and_evaluate(
+                    status="failed",
+                    latency_ms=run_latency_ms,
+                    cost=None,
+                    graph_id=self.graph_id,
+                )
         else:
             with self._state_lock:
                 root_id = self._run_id_to_root.pop(run_id_str, None)

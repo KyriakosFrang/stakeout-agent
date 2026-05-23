@@ -18,6 +18,7 @@ except ImportError:
 
     LLMResult = None  # type: ignore[assignment]
 
+from stakeout_agent.alerts import AlertManager
 from stakeout_agent.backends.base import AbstractMonitorDB
 
 from .base import _MonitorBase
@@ -46,6 +47,7 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         max_payload_chars: int | None = None,
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
+        alert_manager: AlertManager | None = None,
     ):
         if LLMResult is None:
             raise ImportError(
@@ -63,6 +65,7 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
             max_payload_chars=max_payload_chars,
             parent_run_id=parent_run_id,
             prompt_version=prompt_version,
+            alert_manager=alert_manager,
         )
         BaseCallbackHandler.__init__(self)
 
@@ -218,6 +221,7 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         max_payload_chars: int | None = None,
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
+        alert_manager: AlertManager | None = None,
     ):
         if LLMResult is None:
             raise ImportError(
@@ -235,6 +239,7 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
             max_payload_chars=max_payload_chars,
             parent_run_id=parent_run_id,
             prompt_version=prompt_version,
+            alert_manager=alert_manager,
         )
         AsyncCallbackHandler.__init__(self)
 

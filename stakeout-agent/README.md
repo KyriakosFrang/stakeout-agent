@@ -1,11 +1,11 @@
 <h1 align="center">stakeout-agent</h1>
 
 <p align="center">
-  <strong>Drop-in observability for LangGraph and CrewAI.</strong>
+  <strong>Drop-in observability and alerting for LangGraph and CrewAI.</strong>
 </p>
 
 <p align="center">
-   One callback. Every run, node, tool call, token count, prompt, and response — captured automatically into MongoDB, PostgreSQL, or any OpenTelemetry-compatible collector. No changes to your agent code.
+   One callback. Every run, node, tool call, token count, prompt, and response — captured automatically into MongoDB, PostgreSQL, or any OpenTelemetry-compatible collector. Sliding-window alerts fire to Slack, PagerDuty, or any webhook the moment error rates or latency spike. No changes to your agent code.
 </p>
 
 <p align="center">
@@ -94,6 +94,7 @@ stakeout-agent hooks into your framework's event system. It records a `run` docu
 | Cost estimation | **Yes** — opt-in, configurable per model |
 | Prompt & response capture | **Yes** — per node, opt-out, truncation supported |
 | Non-blocking writes | **Yes** — opt-in `BufferedWriter` keeps DB I/O off the LLM hot path |
+| Sliding-window alerting | **Yes** — error rate, P95/P99 latency, cost; webhook to Slack, PagerDuty, etc. |
 | Frameworks | **LangGraph + CrewAI** |
 | Backends | **MongoDB + PostgreSQL + OpenTelemetry** |
 | Dashboard included | **Yes** — [dedicated real-time observability UI](https://github.com/KyriakosFrang/stakeout-dashboard) |
@@ -671,6 +672,68 @@ print(writer.dropped_events)  # writes that went to DLQ or were dropped due to a
 
 ---
 
+## Alerting
+
+`AlertManager` evaluates sliding-window rules after every run completes and fires a webhook when a threshold is breached — with built-in cooldown to prevent alert floods. No extra dependencies; delivery uses the standard library `urllib.request`.
+
+```python
+from stakeout_agent import LangGraphMonitorCallback, MongoMonitorDB
+from stakeout_agent.alerts import AlertManager, Rule
+
+alerts = AlertManager(
+    rules=[
+        Rule(metric="error_rate",        window_seconds=300,  threshold=0.05),  # >5% errors in 5 min
+        Rule(metric="p95_latency_ms",    window_seconds=60,   threshold=10_000), # p95 > 10 s in 1 min
+        Rule(metric="estimated_cost_usd",window_seconds=3600, threshold=5.0),   # >$5/hr
+    ],
+    webhook_url="https://hooks.slack.com/services/...",
+    webhook_headers={"Authorization": "Bearer <token>"},  # optional — for PagerDuty etc.
+    cooldown_seconds=300,  # fire each rule at most once per 5 minutes
+)
+
+cb = LangGraphMonitorCallback(
+    graph_id="my-graph",
+    thread_id="t1",
+    db=MongoMonitorDB(),
+    alert_manager=alerts,
+)
+result = graph.invoke(inputs, config={"callbacks": [cb]})
+```
+
+`alert_manager=` is accepted by all four callback variants: `LangGraphMonitorCallback`, `AsyncLangGraphMonitorCallback`, `CrewAIMonitorCallback`, and `AsyncCrewAIMonitorCallback`.
+
+### Built-in metrics
+
+| Metric | Description |
+|---|---|
+| `error_rate` | Fraction of runs ending in `failed` status within the window |
+| `p95_latency_ms` | 95th-percentile run latency (ms) within the window |
+| `p99_latency_ms` | 99th-percentile run latency (ms) within the window |
+| `estimated_cost_usd` | Sum of `estimated_cost_usd` across all runs within the window |
+
+`p95_latency_ms` / `p99_latency_ms` require a `pricing=` map to be configured on the callback for `estimated_cost_usd` to be populated; latency is always tracked.
+
+### Webhook payload
+
+The webhook fires a `POST` with `Content-Type: application/json`. The payload is compatible with Slack incoming webhooks and generic HTTP receivers:
+
+```json
+{
+  "alert": "error_rate",
+  "value": 0.08,
+  "threshold": 0.05,
+  "window_seconds": 300,
+  "graph_id": "my-graph",
+  "fired_at": "2026-05-15T10:00:00Z"
+}
+```
+
+### Failure handling
+
+Webhook delivery failures are logged at `WARNING` and never raised into the callback or affect run recording. A monitoring failure cannot crash your application.
+
+---
+
 ## Threads and conversation history
 
 ### What `thread_id` means
@@ -804,6 +867,7 @@ Select the `stakeout-agent` service (or whatever `OTEL_SERVICE_NAME` is set to) 
 - [x] Multi-agent run linking (`parent_run_id` constructor parameter)
 - [x] Prompt version tagging (`prompt_version` constructor parameter)
 - [x] Non-blocking async buffered writes (`BufferedWriter` — in-memory queue, exponential-backoff retry, dead-letter queue)
+- [x] Sliding-window alerting (`AlertManager` — error rate, P95/P99 latency, cost; webhook to Slack, PagerDuty, or any HTTP endpoint; per-rule cooldown)
 - [x] [Dedicated UI dashboard](https://github.com/KyriakosFrang/stakeout-dashboard) (Run History, Node Performance, Run Inspector, Thread Deep Dive)
 - [ ] Additional agentic frameworks (PydanticAI, SemanticKernel, AutoGen etc.)
 - [ ] Additional storage backends (SQLite, Redis, …)
