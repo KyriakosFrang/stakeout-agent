@@ -4028,7 +4028,7 @@ wheels = [
 
 [[package]]
 name = "stakeout-agent"
-version = "0.2.0"
+version = "0.2.2"
 source = { editable = "." }
 
 [package.optional-dependencies]
