@@ -50,6 +50,7 @@ class AbstractMonitorDB(ABC):
         run_inputs: str | None = None,
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
+        environment: str | None = None,
     ) -> None: ...
 
     @abstractmethod
@@ -65,6 +66,14 @@ class AbstractMonitorDB(ABC):
 
     @abstractmethod
     def fail_run(self, run_id: str, error: str) -> None: ...
+
+    @abstractmethod
+    def prune_runs(self, older_than_days: int) -> int:
+        """Delete runs (and their events) whose started_at is older than *older_than_days* days.
+
+        Returns the number of runs deleted.
+        """
+        ...
 
     @abstractmethod
     def insert_event(

@@ -26,6 +26,7 @@ except ImportError:
 
 from stakeout_agent.alerts import AlertManager, Rule
 from stakeout_agent.pricing import ModelPricing, PricingMap
+from stakeout_agent.retention import RetentionPolicy
 from stakeout_agent.writer import BufferedWriter
 
 __all__ = [
@@ -40,4 +41,5 @@ __all__ = [
     "BufferedWriter",
     "AlertManager",
     "Rule",
+    "RetentionPolicy",
 ]

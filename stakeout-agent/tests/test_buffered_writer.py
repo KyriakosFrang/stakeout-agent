@@ -81,7 +81,7 @@ class TestArgumentForwarding:
             writer.create_run("run-1", "my_graph", "thread-42", run_inputs="hi", prompt_version="v2")
 
         backend.create_run.assert_called_once_with(
-            "run-1", "my_graph", "thread-42", run_inputs="hi", parent_run_id=None, prompt_version="v2"
+            "run-1", "my_graph", "thread-42", run_inputs="hi", parent_run_id=None, prompt_version="v2", environment=None
         )
 
     def test_complete_run_forwards_token_args(self):

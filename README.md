@@ -101,6 +101,7 @@ stakeout-agent hooks into your framework's event system. It records a `run` docu
 | Prompt & response capture | **Yes** — per node, opt-out, truncation supported |
 | Non-blocking writes | **Yes** — opt-in `BufferedWriter` keeps DB I/O off the LLM hot path |
 | Sliding-window alerting | **Yes** — error rate, P95/P99 latency, cost; webhook to Slack, PagerDuty, etc. |
+| Data retention / TTL | **Yes** — configurable per environment or graph; MongoDB TTL index, Postgres sweep CLI |
 | MCP server | **Yes** — agents query their own run history at runtime via standard MCP tools |
 | Frameworks | **LangGraph + CrewAI** |
 | Backends | **MongoDB + PostgreSQL + OpenTelemetry** |
@@ -457,6 +458,9 @@ Each example runs a two-agent crew (Researcher + Writer) with a `MultiplyTool`, 
 | `OTEL_EXPORTER_OTLP_HEADERS` | — | Headers for the OTLP exporter (e.g. auth tokens) |
 | `OTEL_SERVICE_NAME` | `stakeout-agent` | Service name attached to all spans |
 | `STAKEOUT_DLQ_PATH` | `stakeout_dlq.jsonl` | Path for the `BufferedWriter` dead-letter queue file |
+| `STAKEOUT_RETENTION_DEFAULT_DAYS` | — | Default TTL in days for all runs; unset disables retention |
+| `STAKEOUT_RETENTION_DEV_DAYS` | — | TTL override for runs tagged `environment="dev"` |
+| `STAKEOUT_RETENTION_STAGING_DAYS` | — | TTL override for runs tagged `environment="staging"` |
 
 ### PostgreSQL
 
@@ -742,6 +746,88 @@ Webhook delivery failures are logged at `WARNING` and never raised into the call
 
 ---
 
+## Data retention
+
+`RetentionPolicy` sets a TTL on every run at write time, so old data is deleted automatically — no cron job required for MongoDB, and a single CLI sweep handles PostgreSQL.
+
+### Why
+
+Enterprises operating under GDPR, CCPA, or internal data governance policies need to demonstrate that data is not held beyond a stated period. Without retention, stakeout accumulates data indefinitely. Dev and staging environments also generate high volumes of low-value data that should expire far sooner than production.
+
+### Configure via env vars
+
+```bash
+STAKEOUT_RETENTION_DEFAULT_DAYS=90    # production
+STAKEOUT_RETENTION_DEV_DAYS=7         # expires dev runs after 7 days
+STAKEOUT_RETENTION_STAGING_DAYS=14    # expires staging runs after 14 days
+```
+
+### Configure programmatically
+
+```python
+from stakeout_agent import MongoMonitorDB, RetentionPolicy
+
+policy = RetentionPolicy(
+    default_days=90,
+    overrides={
+        "environment:dev": 7,
+        "environment:staging": 14,
+        "graph:experimental-agent": 30,
+    },
+)
+
+db = MongoMonitorDB(retention=policy)
+```
+
+Pass `retention=policy` to `MongoMonitorDB` or `PostgresMonitorDB`. Setting `retention=None` (the default) preserves the original behaviour — data is never automatically deleted.
+
+Override keys are matched in priority order: `environment:<name>` first, then `graph:<id>`, then `default_days`.
+
+### Tag runs with an environment
+
+Pass `environment=` to the callback constructor so the policy can resolve the correct TTL:
+
+```python
+monitor = LangGraphMonitorCallback(
+    graph_id="my_graph",
+    thread_id="thread_123",
+    db=db,
+    environment="staging",
+)
+```
+
+### How it works per backend
+
+| Backend | Mechanism |
+|---|---|
+| **MongoDB** | A TTL index on `runs.expires_at` and `events.expires_at` is created on first connect (`expireAfterSeconds=0`). MongoDB's background reaper deletes expired documents automatically — no background thread or cron job needed. |
+| **PostgreSQL** | `expires_at` is written on insert (migration `0005` adds the column). Run `stakeout retention apply` periodically (e.g. via cron or `pg_cron`) to delete expired rows. |
+
+### PostgreSQL: sweep expired rows
+
+```bash
+POSTGRES_URI=postgresql://user:pass@localhost/stakeout stakeout retention apply
+# → retention apply: deleted 1 042 run(s) and 9 381 event(s).
+```
+
+Add this to a cron entry or `pg_cron` job to automate it.
+
+### Backfill existing data
+
+Existing rows written before a retention policy was configured have no `expires_at`. Use `backfill` to set one retrospectively:
+
+```bash
+# PostgreSQL
+POSTGRES_URI=... stakeout retention backfill --days 90
+
+# MongoDB
+MONGO_URI=... stakeout retention backfill --days 90
+```
+
+Both commands update only rows where `expires_at` is currently unset, so they are safe to run multiple times.
+
+---
+
 ## MCP server
 
 The `stakeout-agent[mcp]` extra ships a [Model Context Protocol](https://modelcontextprotocol.io) server that exposes your run history as callable tools and browsable resources. Any MCP-aware agent — ChatGPT, Claude, a LangGraph agent with MCP tool nodes, AutoGen — can call these tools as part of its reasoning loop to detect repeated failures, surface cost metrics, or adjust its strategy based on what went wrong before.
@@ -983,6 +1069,7 @@ Select the `stakeout-agent` service (or whatever `OTEL_SERVICE_NAME` is set to) 
 - [x] Non-blocking async buffered writes (`BufferedWriter` — in-memory queue, exponential-backoff retry, dead-letter queue)
 - [x] Sliding-window alerting (`AlertManager` — error rate, P95/P99 latency, cost; webhook to Slack, PagerDuty, or any HTTP endpoint; per-rule cooldown)
 - [x] [Dedicated UI dashboard](https://github.com/KyriakosFrang/stakeout-dashboard) (Run History, Node Performance, Run Inspector, Thread Deep Dive)
+- [x] Configurable data retention / TTL (`RetentionPolicy` — per environment or graph; MongoDB TTL index; Postgres `stakeout retention apply` sweep)
 - [ ] Additional agentic frameworks (PydanticAI, SemanticKernel, AutoGen etc.)
 - [ ] Additional storage backends (SQLite, Redis, …)
 

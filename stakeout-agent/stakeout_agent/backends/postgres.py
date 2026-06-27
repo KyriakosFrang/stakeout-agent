@@ -6,9 +6,10 @@ import os
 import statistics
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from stakeout_agent.backends.base import AbstractMonitorDB, AbstractQueryDB
+from stakeout_agent.retention import RetentionPolicy
 
 _log = logging.getLogger(__name__)
 
@@ -92,9 +93,11 @@ def _percentile(values: list[float], p: int) -> float | None:
 
 
 class PostgresMonitorDB(AbstractMonitorDB, AbstractQueryDB):
-    def __init__(self):
+    def __init__(self, retention: RetentionPolicy | None = None):
         self._conn = None
         self._lock = threading.Lock()
+        self._retention = retention
+        self._run_expires: dict[str, datetime] = {}
 
     @property
     def _connection(self):
@@ -146,15 +149,20 @@ class PostgresMonitorDB(AbstractMonitorDB, AbstractQueryDB):
         run_inputs: str | None = None,
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
+        environment: str | None = None,
     ) -> None:
+        exp_at = self._retention.expires_at(graph_id=graph_id, environment=environment) if self._retention else None
+        if exp_at is not None:
+            self._run_expires[run_id] = exp_at
+
         def _op():
             with self._connection.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO runs
                         (run_id, graph_id, thread_id, status, started_at, ended_at, error,
-                         run_inputs, parent_run_id, prompt_version)
-                    VALUES (%s, %s, %s, 'running', %s, NULL, NULL, %s, %s, %s)
+                         run_inputs, parent_run_id, prompt_version, expires_at)
+                    VALUES (%s, %s, %s, 'running', %s, NULL, NULL, %s, %s, %s, %s)
                     """,
                     (
                         run_id,
@@ -164,6 +172,7 @@ class PostgresMonitorDB(AbstractMonitorDB, AbstractQueryDB):
                         run_inputs,
                         parent_run_id,
                         prompt_version,
+                        exp_at,
                     ),
                 )
             _log.debug("create_run inserted run_id=%s graph_id=%s", run_id, graph_id)
@@ -179,6 +188,8 @@ class PostgresMonitorDB(AbstractMonitorDB, AbstractQueryDB):
         total_cache_read_tokens: int | None = None,
         total_cache_creation_tokens: int | None = None,
     ) -> None:
+        self._run_expires.pop(run_id, None)
+
         def _op():
             with self._connection.cursor() as cur:
                 cur.execute(
@@ -207,6 +218,8 @@ class PostgresMonitorDB(AbstractMonitorDB, AbstractQueryDB):
         self._run_with_retry(f"complete_run {run_id}", _op)
 
     def fail_run(self, run_id: str, error: str) -> None:
+        self._run_expires.pop(run_id, None)
+
         def _op():
             with self._connection.cursor() as cur:
                 cur.execute(
@@ -219,6 +232,24 @@ class PostgresMonitorDB(AbstractMonitorDB, AbstractQueryDB):
                     _log.debug("fail_run run_id=%s", run_id)
 
         self._run_with_retry(f"fail_run {run_id}", _op)
+
+    def prune_runs(self, older_than_days: int) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+        deleted = 0
+
+        def _op():
+            nonlocal deleted
+            with self._connection.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM events WHERE run_id IN (SELECT run_id FROM runs WHERE started_at < %s)",
+                    (cutoff,),
+                )
+                cur.execute("DELETE FROM runs WHERE started_at < %s", (cutoff,))
+                deleted = cur.rowcount
+                _log.info("prune_runs deleted %d runs older than %d days", deleted, older_than_days)
+
+        self._run_with_retry(f"prune_runs older_than_days={older_than_days}", _op)
+        return deleted
 
     def insert_event(
         self,
@@ -238,6 +269,8 @@ class PostgresMonitorDB(AbstractMonitorDB, AbstractQueryDB):
         cache_read_tokens: int | None = None,
         cache_creation_tokens: int | None = None,
     ) -> None:
+        exp_at = self._run_expires.get(run_id)
+
         def _op():
             with self._connection.cursor() as cur:
                 cur.execute(
@@ -245,8 +278,8 @@ class PostgresMonitorDB(AbstractMonitorDB, AbstractQueryDB):
                     INSERT INTO events
                         (run_id, graph_id, event_type, node_name, latency_ms, payload, error,
                          messages, input_tokens, output_tokens, model, llm_input, llm_output,
-                         cache_read_tokens, cache_creation_tokens, timestamp)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         cache_read_tokens, cache_creation_tokens, timestamp, expires_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         run_id,
@@ -265,6 +298,7 @@ class PostgresMonitorDB(AbstractMonitorDB, AbstractQueryDB):
                         cache_read_tokens,
                         cache_creation_tokens,
                         datetime.now(timezone.utc),
+                        exp_at,
                     ),
                 )
             _log.debug("insert_event event_type=%s node=%s run_id=%s", event_type, node_name, run_id)
