@@ -3,7 +3,7 @@ import os
 import statistics
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 try:
     from pymongo import DESCENDING, MongoClient
@@ -22,6 +22,7 @@ except ImportError:
 
 
 from stakeout_agent.backends.base import AbstractMonitorDB, AbstractQueryDB
+from stakeout_agent.retention import RetentionPolicy
 
 _log = logging.getLogger(__name__)
 
@@ -126,9 +127,11 @@ def _percentile(values: list[float], p: int) -> float | None:
 
 
 class MongoMonitorDB(AbstractMonitorDB, AbstractQueryDB):
-    def __init__(self):
+    def __init__(self, retention: RetentionPolicy | None = None):
         self._db = None
         self._lock = threading.Lock()
+        self._retention = retention
+        self._run_expires: dict[str, datetime] = {}
 
     @property
     def _conn(self):
@@ -136,6 +139,9 @@ class MongoMonitorDB(AbstractMonitorDB, AbstractQueryDB):
             with self._lock:
                 if self._db is None:
                     self._db = _make_client()
+                    if self._retention is not None:
+                        self._db.runs.create_index("expires_at", expireAfterSeconds=0, sparse=True)
+                        self._db.events.create_index("expires_at", expireAfterSeconds=0, sparse=True)
         return self._db
 
     @property
@@ -182,7 +188,12 @@ class MongoMonitorDB(AbstractMonitorDB, AbstractQueryDB):
         run_inputs: str | None = None,
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
+        environment: str | None = None,
     ) -> None:
+        exp_at = self._retention.expires_at(graph_id=graph_id, environment=environment) if self._retention else None
+        if exp_at is not None:
+            self._run_expires[run_id] = exp_at
+
         def _op():
             doc: dict = {
                 "_id": run_id,
@@ -200,6 +211,8 @@ class MongoMonitorDB(AbstractMonitorDB, AbstractQueryDB):
                 doc["parent_run_id"] = parent_run_id
             if prompt_version is not None:
                 doc["prompt_version"] = prompt_version
+            if exp_at is not None:
+                doc["expires_at"] = exp_at
             self._conn.runs.insert_one(doc)
             _log.debug("create_run inserted run_id=%s graph_id=%s", run_id, graph_id)
 
@@ -214,6 +227,8 @@ class MongoMonitorDB(AbstractMonitorDB, AbstractQueryDB):
         total_cache_read_tokens: int | None = None,
         total_cache_creation_tokens: int | None = None,
     ) -> None:
+        self._run_expires.pop(run_id, None)
+
         def _op():
             update: dict = {"status": "completed", "ended_at": datetime.now(timezone.utc)}
             if total_input_tokens is not None:
@@ -235,6 +250,8 @@ class MongoMonitorDB(AbstractMonitorDB, AbstractQueryDB):
         self._run_with_retry(f"complete_run {run_id}", _op)
 
     def fail_run(self, run_id: str, error: str) -> None:
+        self._run_expires.pop(run_id, None)
+
         def _op():
             result = self._conn.runs.update_one(
                 {"_id": run_id},
@@ -246,6 +263,22 @@ class MongoMonitorDB(AbstractMonitorDB, AbstractQueryDB):
                 _log.debug("fail_run run_id=%s", run_id)
 
         self._run_with_retry(f"fail_run {run_id}", _op)
+
+    def prune_runs(self, older_than_days: int) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+        deleted = 0
+
+        def _op():
+            nonlocal deleted
+            run_ids = self._conn.runs.distinct("_id", {"started_at": {"$lt": cutoff}})
+            if run_ids:
+                self._conn.events.delete_many({"run_id": {"$in": run_ids}})
+            result = self._conn.runs.delete_many({"started_at": {"$lt": cutoff}})
+            deleted = result.deleted_count
+            _log.info("prune_runs deleted %d runs older than %d days", deleted, older_than_days)
+
+        self._run_with_retry(f"prune_runs older_than_days={older_than_days}", _op)
+        return deleted
 
     def insert_event(
         self,
@@ -265,6 +298,8 @@ class MongoMonitorDB(AbstractMonitorDB, AbstractQueryDB):
         cache_read_tokens: int | None = None,
         cache_creation_tokens: int | None = None,
     ) -> None:
+        exp_at = self._run_expires.get(run_id)
+
         def _op():
             doc: dict = {
                 "run_id": run_id,
@@ -293,6 +328,8 @@ class MongoMonitorDB(AbstractMonitorDB, AbstractQueryDB):
                 doc["cache_read_tokens"] = cache_read_tokens
             if cache_creation_tokens is not None:
                 doc["cache_creation_tokens"] = cache_creation_tokens
+            if exp_at is not None:
+                doc["expires_at"] = exp_at
             self._conn.events.insert_one(doc)
             _log.debug("insert_event event_type=%s node=%s run_id=%s", event_type, node_name, run_id)
 

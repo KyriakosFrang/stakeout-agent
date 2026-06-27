@@ -48,6 +48,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="stakeout", description="stakeout-agent CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    retention_parser = sub.add_parser("retention", help="Manage data retention")
+    retention_sub = retention_parser.add_subparsers(dest="retention_command", required=True)
+
+    apply_parser = retention_sub.add_parser(
+        "apply", help="Delete runs and events whose expires_at has passed (Postgres only)"
+    )
+    apply_parser.add_argument("--log-level", default="WARNING", help="Logging level (default: WARNING)")
+
+    backfill_parser = retention_sub.add_parser(
+        "backfill", help="Backfill expires_at on existing rows using a default TTL"
+    )
+    backfill_parser.add_argument(
+        "--days", type=int, required=True, help="Set expires_at = started_at/timestamp + DAYS for rows missing it"
+    )
+    backfill_parser.add_argument("--log-level", default="WARNING", help="Logging level (default: WARNING)")
+
     mcp_parser = sub.add_parser("mcp", help="Start the MCP server")
     mcp_parser.add_argument(
         "--transport",
@@ -67,6 +83,99 @@ def main() -> None:
 
     if args.command == "mcp":
         _run_mcp(args)
+    elif args.command == "retention":
+        if args.retention_command == "apply":
+            _run_retention_apply(args)
+        elif args.retention_command == "backfill":
+            _run_retention_backfill(args)
+
+
+def _run_retention_apply(args: argparse.Namespace) -> None:
+    """Delete Postgres rows whose expires_at < NOW()."""
+    pg_uri = os.getenv("POSTGRES_URI") or os.getenv("DATABASE_URL")
+    if not pg_uri:
+        print("Error: POSTGRES_URI / DATABASE_URL must be set for 'retention apply'.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        import psycopg2
+    except ImportError:
+        print("Error: psycopg2 is required. Run: pip install 'stakeout-agent[postgres]'", file=sys.stderr)
+        sys.exit(1)
+
+    conn = psycopg2.connect(pg_uri, connect_timeout=5)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM events WHERE expires_at IS NOT NULL AND expires_at < NOW()")
+        events_deleted = cur.rowcount
+        cur.execute("DELETE FROM runs WHERE expires_at IS NOT NULL AND expires_at < NOW()")
+        runs_deleted = cur.rowcount
+    conn.close()
+    print(f"retention apply: deleted {runs_deleted} run(s) and {events_deleted} event(s).")
+
+
+def _run_retention_backfill(args: argparse.Namespace) -> None:
+    """Backfill expires_at on existing rows that have none, using a fixed TTL in days."""
+    pg_uri = os.getenv("POSTGRES_URI") or os.getenv("DATABASE_URL")
+    mongo_uri = os.getenv("MONGO_URI")
+
+    if pg_uri:
+        try:
+            import psycopg2
+        except ImportError:
+            print("Error: psycopg2 is required. Run: pip install 'stakeout-agent[postgres]'", file=sys.stderr)
+            sys.exit(1)
+        conn = psycopg2.connect(pg_uri, connect_timeout=5)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE runs   SET expires_at = started_at + INTERVAL '%s days' WHERE expires_at IS NULL",
+                (args.days,),
+            )
+            runs_updated = cur.rowcount
+            cur.execute(
+                "UPDATE events SET expires_at = timestamp   + INTERVAL '%s days' WHERE expires_at IS NULL",
+                (args.days,),
+            )
+            events_updated = cur.rowcount
+        conn.close()
+        print(f"retention backfill: updated {runs_updated} run(s) and {events_updated} event(s) (Postgres).")
+
+    elif mongo_uri:
+        try:
+            from pymongo import MongoClient
+        except ImportError:
+            print("Error: pymongo is required. Run: pip install 'stakeout-agent[mongodb]'", file=sys.stderr)
+            sys.exit(1)
+        from datetime import timedelta
+
+        db_name = os.getenv("MONGO_DB", "stakeout")
+        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5_000)
+        db = client[db_name]
+
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        delta = timedelta(days=args.days)
+
+        runs_result = db.runs.update_many(
+            {"expires_at": {"$exists": False}},
+            [{"$set": {"expires_at": {"$add": ["$started_at", int(delta.total_seconds() * 1000)]}}}],
+        )
+        events_result = db.events.update_many(
+            {"expires_at": {"$exists": False}},
+            [{"$set": {"expires_at": {"$add": ["$timestamp", int(delta.total_seconds() * 1000)]}}}],
+        )
+        client.close()
+        print(
+            f"retention backfill: updated {runs_result.modified_count} run(s)"
+            f" and {events_result.modified_count} event(s) (MongoDB)."
+        )
+    else:
+        print(
+            "Error: set MONGO_URI for MongoDB or POSTGRES_URI / DATABASE_URL for PostgreSQL.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def _run_mcp(args: argparse.Namespace) -> None:

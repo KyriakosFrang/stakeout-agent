@@ -109,6 +109,7 @@ class BufferedWriter(AbstractMonitorDB):
         run_inputs: str | None = None,
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
+        environment: str | None = None,
     ) -> None:
         self._enqueue(
             "create_run",
@@ -118,6 +119,7 @@ class BufferedWriter(AbstractMonitorDB):
             run_inputs=run_inputs,
             parent_run_id=parent_run_id,
             prompt_version=prompt_version,
+            environment=environment,
         )
 
     def complete_run(
@@ -141,6 +143,9 @@ class BufferedWriter(AbstractMonitorDB):
 
     def fail_run(self, run_id: str, error: str) -> None:
         self._enqueue("fail_run", run_id, error)
+
+    def prune_runs(self, older_than_days: int) -> int:
+        return self._backend.prune_runs(older_than_days)
 
     def insert_event(
         self,

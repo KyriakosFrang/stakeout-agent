@@ -77,6 +77,7 @@ class OTELMonitorDB(AbstractMonitorDB):
         run_inputs: str | None = None,
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
+        environment: str | None = None,
     ) -> None:
         attrs: dict[str, str] = {
             "stakeout.run_id": run_id,
@@ -126,6 +127,9 @@ class OTELMonitorDB(AbstractMonitorDB):
         span.set_status(StatusCode.OK)
         span.end()
         _logger.debug("otel: root span ended run_id=%s", run_id)
+
+    def prune_runs(self, older_than_days: int) -> int:
+        return 0
 
     def fail_run(self, run_id: str, error: str) -> None:
         from opentelemetry.trace import StatusCode
