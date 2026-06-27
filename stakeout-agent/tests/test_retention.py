@@ -4,10 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from stakeout_agent.retention import RetentionPolicy
-
 
 # ---------------------------------------------------------------------------
 # RetentionPolicy.resolve

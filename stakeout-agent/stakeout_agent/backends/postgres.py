@@ -6,7 +6,7 @@ import os
 import statistics
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from stakeout_agent.backends.base import AbstractMonitorDB, AbstractQueryDB
 from stakeout_agent.retention import RetentionPolicy

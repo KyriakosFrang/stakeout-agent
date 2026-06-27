@@ -152,9 +152,6 @@ def _run_retention_backfill(args: argparse.Namespace) -> None:
         client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5_000)
         db = client[db_name]
 
-        from datetime import datetime, timezone
-
-        now = datetime.now(timezone.utc)
         delta = timedelta(days=args.days)
 
         runs_result = db.runs.update_many(
