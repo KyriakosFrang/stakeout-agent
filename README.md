@@ -729,6 +729,7 @@ alerts = AlertManager(
     webhook_url="https://hooks.slack.com/services/...",
     webhook_headers={"Authorization": "Bearer <token>"},  # optional — for PagerDuty etc.
     cooldown_seconds=300,  # fire each rule at most once per 5 minutes
+    max_samples=10_000,    # cap on in-memory run samples, even if `rules=[]`
 )
 
 cb = LangGraphMonitorCallback(
@@ -741,6 +742,10 @@ result = graph.invoke(inputs, config={"callbacks": [cb]})
 ```
 
 `alert_manager=` is accepted by all four callback variants: `LangGraphMonitorCallback`, `AsyncLangGraphMonitorCallback`, `CrewAIMonitorCallback`, and `AsyncCrewAIMonitorCallback`.
+
+`max_samples` bounds the in-memory sample deque independently of rule configuration, so an `AlertManager` constructed with `rules=[]` (e.g. for a feature-flagged rollout where alerting is toggled by an empty rule list) doesn't grow unbounded — the default of 10,000 is well above what any reasonable window needs.
+
+Webhook delivery runs on a small background thread pool, so a slow or degraded webhook endpoint never adds latency to the LLM call. Call `alerts.close(wait=True)` at shutdown to flush any pending deliveries — optional, and mirrors `BufferedWriter`'s "daemon thread, call `close()` when guaranteed delivery matters" behavior.
 
 ### Built-in metrics
 

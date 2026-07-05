@@ -96,6 +96,7 @@ class TestThresholdBreach:
             mock_open.return_value.__exit__ = MagicMock(return_value=False)
             # 100% error rate → exceeds 5%
             manager.record_and_evaluate(status="failed", latency_ms=100.0, cost=None, graph_id="g1")
+            manager.close(wait=True)
         mock_open.assert_called_once()
         req = mock_open.call_args[0][0]
         payload = json.loads(req.data)
@@ -133,6 +134,7 @@ class TestCooldown:
             mock_open.return_value.__exit__ = MagicMock(return_value=False)
             manager.record_and_evaluate(status="failed", latency_ms=None, cost=None, graph_id="g1")
             manager.record_and_evaluate(status="failed", latency_ms=None, cost=None, graph_id="g1")
+            manager.close(wait=True)
         # Only one webhook call despite two breaches
         assert mock_open.call_count == 1
 
@@ -145,6 +147,7 @@ class TestCooldown:
             # Backdate the last_fired time to simulate cooldown expiry
             manager._last_fired["error_rate"] -= 2
             manager.record_and_evaluate(status="failed", latency_ms=None, cost=None, graph_id="g1")
+            manager.close(wait=True)
         assert mock_open.call_count == 2
 
 
@@ -154,6 +157,7 @@ class TestDeliveryFailure:
         with patch("urllib.request.urlopen", side_effect=OSError("network error")):
             # Must not raise
             manager.record_and_evaluate(status="failed", latency_ms=None, cost=None, graph_id="g1")
+            manager.close(wait=True)
 
     def test_delivery_failure_logged(self, caplog):
         import logging
@@ -162,6 +166,7 @@ class TestDeliveryFailure:
         with patch("urllib.request.urlopen", side_effect=OSError("network error")):
             with caplog.at_level(logging.WARNING, logger="stakeout_agent.alerts"):
                 manager.record_and_evaluate(status="failed", latency_ms=None, cost=None, graph_id="g1")
+                manager.close(wait=True)
         assert any("webhook delivery failed" in r.message for r in caplog.records)
 
 
@@ -176,6 +181,7 @@ class TestMultiRule:
             mock_open.return_value.__enter__ = lambda s: s
             mock_open.return_value.__exit__ = MagicMock(return_value=False)
             manager.record_and_evaluate(status="failed", latency_ms=5000.0, cost=None, graph_id="g1")
+            manager.close(wait=True)
         assert mock_open.call_count == 2
         alerts_fired = {json.loads(c[0][0].data)["alert"] for c in mock_open.call_args_list}
         assert alerts_fired == {"error_rate", "p95_latency_ms"}
@@ -193,6 +199,7 @@ class TestMultiRule:
             manager.record_and_evaluate(status="failed", latency_ms=None, cost=5.0, graph_id="g1")
             # Second call fires neither (both in cooldown)
             manager.record_and_evaluate(status="failed", latency_ms=None, cost=5.0, graph_id="g1")
+            manager.close(wait=True)
         assert mock_open.call_count == 2  # only from first call
 
 
@@ -207,10 +214,46 @@ class TestWebhookHeaders:
             mock_open.return_value.__enter__ = lambda s: s
             mock_open.return_value.__exit__ = MagicMock(return_value=False)
             manager.record_and_evaluate(status="failed", latency_ms=None, cost=None, graph_id="g1")
+            manager.close(wait=True)
         req = mock_open.call_args[0][0]
         assert req.get_header("Authorization") == "Bearer secret"
         assert req.get_header("X-custom") == "value"
         assert req.get_header("Content-type") == "application/json"
+
+
+class TestMaxSamples:
+    def test_sample_count_bounded_with_no_rules(self):
+        manager = AlertManager(rules=[], webhook_url="http://x", max_samples=100)
+        for _ in range(20_000):
+            manager.record_and_evaluate(status="completed", latency_ms=10.0, cost=None, graph_id="g1")
+        assert len(manager._samples) <= 100
+
+    def test_sample_count_bounded_with_rules(self):
+        manager = _make_manager(max_samples=50)
+        with patch("urllib.request.urlopen") as mock_open:
+            mock_open.return_value.__enter__ = lambda s: s
+            mock_open.return_value.__exit__ = MagicMock(return_value=False)
+            for _ in range(200):
+                manager.record_and_evaluate(status="completed", latency_ms=10.0, cost=None, graph_id="g1")
+            manager.close(wait=True)
+        assert len(manager._samples) <= 50
+
+
+class TestAsyncDelivery:
+    def test_webhook_delivery_does_not_block_caller(self):
+        manager = _make_manager()
+
+        def slow_urlopen(*args, **kwargs):
+            time.sleep(2)
+            return MagicMock(__enter__=lambda s: s, __exit__=MagicMock(return_value=False))
+
+        with patch("urllib.request.urlopen", side_effect=slow_urlopen) as mock_open:
+            start = time.monotonic()
+            manager.record_and_evaluate(status="failed", latency_ms=None, cost=None, graph_id="g1")
+            elapsed = time.monotonic() - start
+            assert elapsed < 0.1
+            manager.close(wait=True)
+        mock_open.assert_called_once()
 
 
 class TestSlidingWindow:
