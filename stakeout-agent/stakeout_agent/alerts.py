@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import dataclasses
 import json
 import logging
@@ -8,6 +9,7 @@ import threading
 import time
 import urllib.request
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 
 _logger = logging.getLogger(__name__)
 
@@ -43,14 +45,18 @@ class AlertManager:
         webhook_url: str,
         webhook_headers: dict[str, str] | None = None,
         cooldown_seconds: float = 300,
+        max_samples: int = 10_000,
     ) -> None:
         self._rules = list(rules)
         self._webhook_url = webhook_url
         self._webhook_headers = webhook_headers or {}
         self._cooldown_seconds = cooldown_seconds
+        self._max_samples = max_samples
         self._lock = threading.Lock()
         self._samples: deque[_RunSample] = deque()
         self._last_fired: dict[str, float] = {}  # metric -> last fire timestamp
+        self._executor: ThreadPoolExecutor | None = None
+        self._executor_lock = threading.Lock()
 
     def record_and_evaluate(
         self,
@@ -82,16 +88,31 @@ class AlertManager:
                 if now - self._last_fired.get(rule.metric, 0.0) < self._cooldown_seconds:
                     continue
                 self._last_fired[rule.metric] = now
-            self._fire(rule, value, graph_id, now)
+            self._get_executor().submit(self._fire, rule, value, graph_id, now)
 
     def _purge(self, now: float) -> None:
         # called with lock held; removes samples outside the largest window
-        if not self._rules:
-            return
-        max_window = max(r.window_seconds for r in self._rules)
-        cutoff = now - max_window
-        while self._samples and self._samples[0].timestamp < cutoff:
+        if self._rules:
+            max_window = max(r.window_seconds for r in self._rules)
+            cutoff = now - max_window
+            while self._samples and self._samples[0].timestamp < cutoff:
+                self._samples.popleft()
+        # count-based eviction — always enforced, independent of rule configuration
+        while len(self._samples) > self._max_samples:
             self._samples.popleft()
+
+    def _get_executor(self) -> ThreadPoolExecutor:
+        if self._executor is None:
+            with self._executor_lock:
+                if self._executor is None:
+                    self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="stakeout-alert")
+                    atexit.register(self._executor.shutdown, wait=False, cancel_futures=True)
+        return self._executor
+
+    def close(self, wait: bool = True) -> None:
+        """Flush pending webhook deliveries. Optional — mirrors ``BufferedWriter.close()``."""
+        if self._executor is not None:
+            self._executor.shutdown(wait=wait)
 
     @staticmethod
     def _compute(metric: str, window: list[_RunSample]) -> float | None:
