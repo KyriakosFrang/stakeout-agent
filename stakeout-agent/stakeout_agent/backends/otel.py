@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import threading
+import time
 from typing import TYPE_CHECKING, Any
 
 from stakeout_agent.backends.base import AbstractMonitorDB
@@ -46,6 +47,7 @@ class OTELMonitorDB(AbstractMonitorDB):
         self,
         tracer_provider: TracerProvider | None = None,
         service_name: str | None = None,
+        stale_span_ttl_seconds: float | None = 3600.0,
     ) -> None:
         from opentelemetry import trace
 
@@ -60,10 +62,34 @@ class OTELMonitorDB(AbstractMonitorDB):
 
         self._tracer = self._provider.get_tracer(self.INSTRUMENTATION_NAME)
 
+        self._stale_span_ttl_seconds = stale_span_ttl_seconds
         self._lock = threading.Lock()
-        self._run_spans: dict[str, Span] = {}
-        self._node_spans: dict[tuple[str, str], Span] = {}
-        self._tool_spans: dict[tuple[str, str], Span] = {}
+        self._run_spans: dict[str, tuple[Span, float]] = {}
+        self._node_spans: dict[tuple[str, str], tuple[Span, float]] = {}
+        self._tool_spans: dict[tuple[str, str], tuple[Span, float]] = {}
+
+    def _reap_stale_spans(self, now: float) -> None:
+        """End and drop spans that have been open longer than the TTL.
+
+        Called from the top of create_run, so this leak cannot grow unbounded
+        between legitimate root-run invocations.
+        """
+        from opentelemetry.trace import StatusCode
+
+        if self._stale_span_ttl_seconds is None:
+            return
+        with self._lock:
+            for store, kind in (
+                (self._run_spans, "run"),
+                (self._node_spans, "node"),
+                (self._tool_spans, "tool"),
+            ):
+                stale_keys = [k for k, (_, start) in store.items() if now - start > self._stale_span_ttl_seconds]
+                for k in stale_keys:
+                    span, _ = store.pop(k)
+                    span.set_status(StatusCode.ERROR, description="StaleSpanTimeout")
+                    span.end()
+                    _logger.warning("otel: reaped stale %s span key=%s", kind, k)
 
     # ------------------------------------------------------------------
     # AbstractMonitorDB interface
@@ -79,6 +105,7 @@ class OTELMonitorDB(AbstractMonitorDB):
         prompt_version: str | None = None,
         environment: str | None = None,
     ) -> None:
+        self._reap_stale_spans(time.monotonic())
         attrs: dict[str, str] = {
             "stakeout.run_id": run_id,
             "stakeout.graph_id": graph_id,
@@ -92,7 +119,7 @@ class OTELMonitorDB(AbstractMonitorDB):
             attrs["stakeout.prompt_version"] = prompt_version
         span = self._tracer.start_span(graph_id, attributes=attrs)
         with self._lock:
-            self._run_spans[run_id] = span
+            self._run_spans[run_id] = (span, time.monotonic())
         _logger.debug("otel: root span started run_id=%s graph_id=%s", run_id, graph_id)
 
     def complete_run(
@@ -107,7 +134,8 @@ class OTELMonitorDB(AbstractMonitorDB):
         from opentelemetry.trace import StatusCode
 
         with self._lock:
-            span = self._run_spans.pop(run_id, None)
+            entry = self._run_spans.pop(run_id, None)
+        span = entry[0] if entry is not None else None
 
         if span is None:
             _logger.warning("otel: complete_run called for unknown run_id=%s", run_id)
@@ -135,7 +163,8 @@ class OTELMonitorDB(AbstractMonitorDB):
         from opentelemetry.trace import StatusCode
 
         with self._lock:
-            span = self._run_spans.pop(run_id, None)
+            entry = self._run_spans.pop(run_id, None)
+        span = entry[0] if entry is not None else None
 
         if span is None:
             _logger.warning("otel: fail_run called for unknown run_id=%s", run_id)
@@ -204,7 +233,8 @@ class OTELMonitorDB(AbstractMonitorDB):
         from opentelemetry import trace
 
         with self._lock:
-            root = self._run_spans.get(run_id)
+            entry = self._run_spans.get(run_id)
+        root = entry[0] if entry is not None else None
 
         if root is None:
             _logger.warning("otel: node_start for unknown run_id=%s node=%s", run_id, node_name)
@@ -216,7 +246,7 @@ class OTELMonitorDB(AbstractMonitorDB):
         span.set_attribute("stakeout.node_name", node_name)
 
         with self._lock:
-            self._node_spans[(run_id, node_name)] = span
+            self._node_spans[(run_id, node_name)] = (span, time.monotonic())
 
     def _on_node_end(
         self,
@@ -236,7 +266,8 @@ class OTELMonitorDB(AbstractMonitorDB):
         from opentelemetry.trace import StatusCode
 
         with self._lock:
-            span = self._node_spans.pop((run_id, node_name), None)
+            entry = self._node_spans.pop((run_id, node_name), None)
+        span = entry[0] if entry is not None else None
 
         if span is None:
             _logger.warning("otel: node_end for unknown span run_id=%s node=%s", run_id, node_name)
@@ -268,7 +299,8 @@ class OTELMonitorDB(AbstractMonitorDB):
         from opentelemetry import trace
 
         with self._lock:
-            root = self._run_spans.get(run_id)
+            entry = self._run_spans.get(run_id)
+        root = entry[0] if entry is not None else None
 
         if root is None:
             _logger.warning("otel: %s for unknown run_id=%s tool=%s", event_type, run_id, node_name)
@@ -280,7 +312,7 @@ class OTELMonitorDB(AbstractMonitorDB):
         span.set_attribute("stakeout.node_name", node_name)
 
         with self._lock:
-            self._tool_spans[(run_id, node_name)] = span
+            self._tool_spans[(run_id, node_name)] = (span, time.monotonic())
 
     def _on_tool_end(
         self,
@@ -294,7 +326,8 @@ class OTELMonitorDB(AbstractMonitorDB):
         from opentelemetry.trace import StatusCode
 
         with self._lock:
-            span = self._tool_spans.pop((run_id, node_name), None)
+            entry = self._tool_spans.pop((run_id, node_name), None)
+        span = entry[0] if entry is not None else None
 
         if span is None:
             _logger.warning("otel: %s for unknown span run_id=%s tool=%s", event_type, run_id, node_name)
@@ -311,7 +344,8 @@ class OTELMonitorDB(AbstractMonitorDB):
         from opentelemetry.trace import StatusCode
 
         with self._lock:
-            span = self._node_spans.pop((run_id, node_name), None) or self._tool_spans.pop((run_id, node_name), None)
+            entry = self._node_spans.pop((run_id, node_name), None) or self._tool_spans.pop((run_id, node_name), None)
+        span = entry[0] if entry is not None else None
 
         if span is None:
             _logger.warning("otel: error event for unknown span run_id=%s node=%s", run_id, node_name)

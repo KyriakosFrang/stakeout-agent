@@ -89,6 +89,7 @@ class _MonitorBase:
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
         alert_manager: AlertManager | None = None,
+        stale_run_ttl_seconds: float | None = 3600.0,
     ):
         self.graph_id = graph_id
         self.thread_id = thread_id
@@ -104,6 +105,7 @@ class _MonitorBase:
         self.parent_run_id = parent_run_id
         self.prompt_version = prompt_version
         self._alert_manager = alert_manager
+        self._stale_run_ttl_seconds = stale_run_ttl_seconds
         self._log = logging.LoggerAdapter(_logger, {"graph_id": graph_id, "thread_id": thread_id})
 
         self._state_lock = threading.Lock()
@@ -112,6 +114,38 @@ class _MonitorBase:
         # any child event run_id str -> root run_id str, for routing child events to the right context
         self._run_id_to_root: dict[str, str] = {}
         self._dropped_events: int = 0
+
+    def _reap_stale_runs(self, now: float) -> None:
+        """Force-close root runs that have been active longer than the TTL.
+
+        Called from the top of every new root-run start, so the leak this guards
+        against cannot grow unbounded between legitimate invocations.
+        """
+        if self._stale_run_ttl_seconds is None:
+            return
+        with self._state_lock:
+            stale_ids = [
+                run_id
+                for run_id, ctx in self._active_runs.items()
+                if now - ctx.run_start_time > self._stale_run_ttl_seconds
+            ]
+        for run_id in stale_ids:
+            with self._state_lock:
+                ctx = self._active_runs.pop(run_id, None)
+                self._run_id_to_root.pop(run_id, None)
+                dangling = [rid for rid, root in self._run_id_to_root.items() if root == run_id]
+                for rid in dangling:
+                    self._run_id_to_root.pop(rid, None)
+            if ctx is not None:
+                self._log.warning(
+                    "reaping stale run_id=%s active for %.0fs (ttl=%.0fs) — writing synthetic timeout failure",
+                    run_id,
+                    now - ctx.run_start_time,
+                    self._stale_run_ttl_seconds,
+                )
+                self._safe_db_write(
+                    lambda rid=run_id: self.db.fail_run(rid, "StaleRunTimeout: no terminal event received")
+                )
 
     @property
     def dropped_events(self) -> int:
@@ -163,6 +197,7 @@ class _MonitorBase:
     ) -> None:
         run_id_str = str(run_id)
         if parent_run_id is None:
+            self._reap_stale_runs(time.monotonic())
             ctx = _RunContext(run_id=run_id_str)
             with self._state_lock:
                 self._active_runs[run_id_str] = ctx

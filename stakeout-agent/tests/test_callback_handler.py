@@ -646,3 +646,74 @@ class TestLLMPayloadClearance:
         cb.on_chain_end({}, run_id=node_id, parent_run_id=root_id)
         cb.on_chain_end({}, run_id=root_id, parent_run_id=None)
         assert cb._active_runs == {}
+
+
+class TestStaleRunReaping:
+    def _make(self, **kwargs) -> tuple[LangGraphMonitorCallback, MagicMock]:
+        db = mock_db()
+        cb = LangGraphMonitorCallback(graph_id=GRAPH_ID, thread_id=THREAD_ID, db=db, **kwargs)
+        return cb, db
+
+    def test_stale_root_run_is_reaped_on_next_root_start(self, monkeypatch):
+        cb, db = self._make(stale_run_ttl_seconds=10.0)
+        stale_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=stale_id, parent_run_id=None)
+        db.reset_mock()
+
+        # Backdate the stale run's start time so it looks like it has been running
+        # far longer than the TTL, without needing to actually sleep in the test.
+        cb._active_runs[str(stale_id)].run_start_time = time.monotonic() - 100.0
+
+        new_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=new_id, parent_run_id=None)
+
+        db.fail_run.assert_called_once()
+        args, _ = db.fail_run.call_args
+        assert args[0] == str(stale_id)
+        assert "StaleRunTimeout" in args[1]
+        assert str(stale_id) not in cb._active_runs
+        assert str(stale_id) not in cb._run_id_to_root
+        assert str(new_id) in cb._active_runs
+
+    def test_dangling_child_run_ids_are_dropped_with_stale_root(self):
+        cb, db = self._make(stale_run_ttl_seconds=10.0)
+        stale_id = make_uuid()
+        child_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=stale_id, parent_run_id=None)
+        cb.on_chain_start({"name": "n"}, {}, run_id=child_id, parent_run_id=stale_id)
+        cb._active_runs[str(stale_id)].run_start_time = time.monotonic() - 100.0
+
+        cb.on_chain_start({}, {}, run_id=make_uuid(), parent_run_id=None)
+
+        assert str(child_id) not in cb._run_id_to_root
+
+    def test_run_within_ttl_is_not_reaped(self):
+        cb, db = self._make(stale_run_ttl_seconds=3600.0)
+        run_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=run_id, parent_run_id=None)
+        db.reset_mock()
+
+        cb.on_chain_start({}, {}, run_id=make_uuid(), parent_run_id=None)
+
+        db.fail_run.assert_not_called()
+        assert str(run_id) in cb._active_runs
+
+    def test_ttl_none_disables_reaping(self):
+        cb, db = self._make(stale_run_ttl_seconds=None)
+        stale_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=stale_id, parent_run_id=None)
+        cb._active_runs[str(stale_id)].run_start_time = time.monotonic() - 10_000.0
+        db.reset_mock()
+
+        cb.on_chain_start({}, {}, run_id=make_uuid(), parent_run_id=None)
+
+        db.fail_run.assert_not_called()
+        assert str(stale_id) in cb._active_runs
+
+    def test_normal_run_completing_within_ttl_leaves_no_leftover_state(self):
+        cb, db = self._make(stale_run_ttl_seconds=3600.0)
+        run_id = make_uuid()
+        cb.on_chain_start({}, {}, run_id=run_id, parent_run_id=None)
+        cb.on_chain_end({}, run_id=run_id, parent_run_id=None)
+        assert cb._active_runs == {}
+        assert cb._run_id_to_root == {}

@@ -275,3 +275,56 @@ class TestPostgresRetention:
 
         event_params = mock_cursor.execute.call_args.args[1]
         assert event_params[-1] is None  # expires_at
+
+
+# ---------------------------------------------------------------------------
+# _run_expires reaping (orphaned run/state memory leak cleanup)
+# ---------------------------------------------------------------------------
+
+
+class TestMongoReapStaleExpires:
+    def test_stale_entry_dropped_on_next_create_run(self):
+        mock_db, mock_runs, _ = _make_mock_mongo_db()
+        policy = RetentionPolicy(default_days=30)
+        with _patched_mongo(mock_db, retention=policy) as monitor:
+            monitor.create_run("stale-run", "my_graph", "t1")
+            monitor._run_expires["stale-run"] = datetime.now(timezone.utc) - timedelta(days=2)
+
+            monitor.create_run("new-run", "my_graph", "t1")
+
+            assert "stale-run" not in monitor._run_expires
+            assert "new-run" in monitor._run_expires
+
+    def test_entry_within_ttl_is_kept(self):
+        mock_db, mock_runs, _ = _make_mock_mongo_db()
+        policy = RetentionPolicy(default_days=30)
+        with _patched_mongo(mock_db, retention=policy) as monitor:
+            monitor.create_run("r1", "my_graph", "t1")
+            monitor.create_run("r2", "my_graph", "t1")
+
+            assert "r1" in monitor._run_expires
+            assert "r2" in monitor._run_expires
+
+
+class TestPostgresReapStaleExpires:
+    def test_stale_entry_dropped_on_next_create_run(self):
+        mock_conn, mock_cursor = _make_mock_pg_conn()
+        policy = RetentionPolicy(default_days=30)
+        with _patched_postgres(mock_conn, retention=policy) as pg:
+            pg.create_run("stale-run", "my_graph", "t1")
+            pg._run_expires["stale-run"] = datetime.now(timezone.utc) - timedelta(days=2)
+
+            pg.create_run("new-run", "my_graph", "t1")
+
+            assert "stale-run" not in pg._run_expires
+            assert "new-run" in pg._run_expires
+
+    def test_entry_within_ttl_is_kept(self):
+        mock_conn, mock_cursor = _make_mock_pg_conn()
+        policy = RetentionPolicy(default_days=30)
+        with _patched_postgres(mock_conn, retention=policy) as pg:
+            pg.create_run("r1", "my_graph", "t1")
+            pg.create_run("r2", "my_graph", "t1")
+
+            assert "r1" in pg._run_expires
+            assert "r2" in pg._run_expires

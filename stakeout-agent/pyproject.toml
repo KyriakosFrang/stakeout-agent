@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "stakeout-agent"
-version = "0.2.2"
+version = "0.2.3"
 description = "Drop-in observability for LangGraph and CrewAI — captures every run, node, tool call, token count, prompt, and response into MongoDB, PostgreSQL, or any OpenTelemetry-compatible collector"
 readme = "README.md"
 license = { text = "MIT" }

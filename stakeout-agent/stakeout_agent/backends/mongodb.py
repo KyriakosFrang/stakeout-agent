@@ -126,12 +126,22 @@ def _percentile(values: list[float], p: int) -> float | None:
     return statistics.quantiles(values, n=100)[p - 1]
 
 
+_STALE_EXPIRES_TTL_SECONDS = 86400.0  # 24h; _run_expires entries are tiny, so a long TTL is safe
+
+
 class MongoMonitorDB(AbstractMonitorDB, AbstractQueryDB):
     def __init__(self, retention: RetentionPolicy | None = None):
         self._db = None
         self._lock = threading.Lock()
         self._retention = retention
         self._run_expires: dict[str, datetime] = {}
+
+    def _reap_stale_expires(self, ttl_seconds: float = _STALE_EXPIRES_TTL_SECONDS) -> None:
+        """Drop _run_expires entries for runs that never called complete_run/fail_run."""
+        now = datetime.now(timezone.utc)
+        stale = [rid for rid, exp in self._run_expires.items() if (now - exp).total_seconds() > ttl_seconds]
+        for rid in stale:
+            self._run_expires.pop(rid, None)
 
     @property
     def _conn(self):
@@ -190,6 +200,7 @@ class MongoMonitorDB(AbstractMonitorDB, AbstractQueryDB):
         prompt_version: str | None = None,
         environment: str | None = None,
     ) -> None:
+        self._reap_stale_expires()
         exp_at = self._retention.expires_at(graph_id=graph_id, environment=environment) if self._retention else None
         if exp_at is not None:
             self._run_expires[run_id] = exp_at
