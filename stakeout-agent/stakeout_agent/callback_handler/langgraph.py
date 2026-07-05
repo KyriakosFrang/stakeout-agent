@@ -48,6 +48,7 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
         alert_manager: AlertManager | None = None,
+        stale_run_ttl_seconds: float | None = 3600.0,
     ):
         if LLMResult is None:
             raise ImportError(
@@ -66,6 +67,7 @@ class LangGraphMonitorCallback(_MonitorBase, BaseCallbackHandler):
             parent_run_id=parent_run_id,
             prompt_version=prompt_version,
             alert_manager=alert_manager,
+            stale_run_ttl_seconds=stale_run_ttl_seconds,
         )
         BaseCallbackHandler.__init__(self)
 
@@ -222,6 +224,7 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
         alert_manager: AlertManager | None = None,
+        stale_run_ttl_seconds: float | None = 3600.0,
     ):
         if LLMResult is None:
             raise ImportError(
@@ -240,6 +243,7 @@ class AsyncLangGraphMonitorCallback(_MonitorBase, AsyncCallbackHandler):
             parent_run_id=parent_run_id,
             prompt_version=prompt_version,
             alert_manager=alert_manager,
+            stale_run_ttl_seconds=stale_run_ttl_seconds,
         )
         AsyncCallbackHandler.__init__(self)
 

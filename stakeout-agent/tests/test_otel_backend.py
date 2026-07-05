@@ -54,7 +54,7 @@ class TestCreateRun:
         provider, _, span = _make_mock_provider()
         db = _db(provider)
         db.create_run("run-1", "g", "t")
-        assert db._run_spans["run-1"] is span
+        assert db._run_spans["run-1"][0] is span
 
 
 # ---------------------------------------------------------------------------
@@ -384,3 +384,81 @@ class TestUnknownEventType:
     def test_unknown_event_type_does_not_raise(self):
         db = _db()
         db.insert_event(run_id="r", graph_id="g", event_type="custom_event", node_name="n")
+
+
+# ---------------------------------------------------------------------------
+# Stale span reaping
+# ---------------------------------------------------------------------------
+
+
+class TestStaleSpanReaping:
+    def test_stale_run_span_is_ended_with_error_on_next_create_run(self):
+        from opentelemetry.trace import StatusCode
+
+        provider, tracer, stale_span = _make_mock_provider()
+        db = OTELMonitorDB(tracer_provider=provider, stale_span_ttl_seconds=10.0)
+        db.create_run("stale-run", "g", "t")
+
+        run_id, (span, start) = next(iter(db._run_spans.items()))
+        db._run_spans[run_id] = (span, start - 100.0)
+
+        new_span = MagicMock()
+        tracer.start_span.return_value = new_span
+        db.create_run("new-run", "g", "t")
+
+        stale_span.set_status.assert_called_once()
+        assert stale_span.set_status.call_args.args[0] == StatusCode.ERROR
+        stale_span.end.assert_called_once()
+        assert "stale-run" not in db._run_spans
+        assert "new-run" in db._run_spans
+
+    def test_stale_node_and_tool_spans_are_ended(self):
+        provider, tracer, _ = _make_mock_provider()
+        db = OTELMonitorDB(tracer_provider=provider, stale_span_ttl_seconds=10.0)
+        db.create_run("run-1", "g", "t")
+
+        node_span = MagicMock()
+        tracer.start_span.return_value = node_span
+        db.insert_event(run_id="run-1", graph_id="g", event_type="node_start", node_name="my_node")
+
+        tool_span = MagicMock()
+        tracer.start_span.return_value = tool_span
+        db.insert_event(run_id="run-1", graph_id="g", event_type="tool_call", node_name="my_tool")
+
+        # backdate both child spans past the TTL
+        key = ("run-1", "my_node")
+        span, start = db._node_spans[key]
+        db._node_spans[key] = (span, start - 100.0)
+        key = ("run-1", "my_tool")
+        span, start = db._tool_spans[key]
+        db._tool_spans[key] = (span, start - 100.0)
+
+        db.create_run("run-2", "g", "t")
+
+        node_span.end.assert_called_once()
+        tool_span.end.assert_called_once()
+        assert ("run-1", "my_node") not in db._node_spans
+        assert ("run-1", "my_tool") not in db._tool_spans
+
+    def test_span_within_ttl_is_not_reaped(self):
+        provider, _, span = _make_mock_provider()
+        db = OTELMonitorDB(tracer_provider=provider, stale_span_ttl_seconds=3600.0)
+        db.create_run("run-1", "g", "t")
+
+        db.create_run("run-2", "g", "t")
+
+        span.end.assert_not_called()
+        assert "run-1" in db._run_spans
+
+    def test_ttl_none_disables_reaping(self):
+        provider, _, span = _make_mock_provider()
+        db = OTELMonitorDB(tracer_provider=provider, stale_span_ttl_seconds=None)
+        db.create_run("run-1", "g", "t")
+
+        run_id, (s, start) = next(iter(db._run_spans.items()))
+        db._run_spans[run_id] = (s, start - 10_000.0)
+
+        db.create_run("run-2", "g", "t")
+
+        span.end.assert_not_called()
+        assert "run-1" in db._run_spans

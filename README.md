@@ -615,6 +615,34 @@ One document per node/task start/end, tool call, or error.
 
 ---
 
+## Orphaned run cleanup
+
+A run that never reaches a terminal callback — a crashed process, an uncaught exception in a
+framework's internals, or a graph that hangs forever — would otherwise leak its in-memory state
+forever in a long-running service. Every callback handler and the `OTELMonitorDB` backend guard
+against this with an opportunistic **stale-run reaper**: on every new root-run start, entries
+older than a TTL are force-closed with a synthetic `StaleRunTimeout` failure (and, for OTEL,
+their span is ended with an `ERROR` status) so they don't accumulate.
+
+```python
+from stakeout_agent import LangGraphMonitorCallback
+
+monitor = LangGraphMonitorCallback(
+    graph_id="my_graph",
+    thread_id="thread_123",
+    stale_run_ttl_seconds=3600.0,  # default: 1 hour; pass None to disable
+)
+```
+
+`stale_run_ttl_seconds` (default `3600.0`) is accepted by all four callback variants —
+`LangGraphMonitorCallback`, `AsyncLangGraphMonitorCallback`, `CrewAIMonitorCallback`, and
+`AsyncCrewAIMonitorCallback`. `OTELMonitorDB` has the analogous `stale_span_ttl_seconds`
+(same default) for its in-memory span dicts. No legitimate invocation should run for an hour
+without emitting any node-level callback; raise the TTL (or pass `None`) if you have genuinely
+long-running graphs.
+
+---
+
 ## Error handling
 
 All database writes catch exceptions and log them — a monitoring failure will never crash your application. Enable `DEBUG` logging to see them:

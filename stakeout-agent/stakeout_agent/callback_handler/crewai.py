@@ -106,6 +106,7 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
         alert_manager: AlertManager | None = None,
+        stale_run_ttl_seconds: float | None = 3600.0,
     ) -> None:
         if CrewKickoffStartedEvent is None:
             raise ImportError(
@@ -121,6 +122,7 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             parent_run_id=parent_run_id,
             prompt_version=prompt_version,
             alert_manager=alert_manager,
+            stale_run_ttl_seconds=stale_run_ttl_seconds,
         )
         BaseEventListener.__init__(self)
 
@@ -131,6 +133,7 @@ class CrewAIMonitorCallback(_MonitorBase, BaseEventListener):
 
         @crewai_event_bus.on(CrewKickoffStartedEvent)
         def on_crew_start(source: Any, event: CrewKickoffStartedEvent) -> None:
+            self._reap_stale_runs(time.monotonic())
             run_id = str(uuid4())
             ctx = _RunContext(run_id=run_id)
             with self._state_lock:
@@ -377,6 +380,7 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
         parent_run_id: str | None = None,
         prompt_version: str | None = None,
         alert_manager: AlertManager | None = None,
+        stale_run_ttl_seconds: float | None = 3600.0,
     ) -> None:
         if CrewKickoffStartedEvent is None:
             raise ImportError(
@@ -393,6 +397,7 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
             parent_run_id=parent_run_id,
             prompt_version=prompt_version,
             alert_manager=alert_manager,
+            stale_run_ttl_seconds=stale_run_ttl_seconds,
         )
         BaseEventListener.__init__(self)
 
@@ -401,6 +406,7 @@ class AsyncCrewAIMonitorCallback(_MonitorBase, BaseEventListener):
 
         @crewai_event_bus.on(CrewKickoffStartedEvent)
         async def on_crew_start(source: Any, event: CrewKickoffStartedEvent) -> None:
+            self._reap_stale_runs(time.monotonic())
             run_id = str(uuid4())
             ctx = _RunContext(run_id=run_id)
             with self._state_lock:

@@ -48,7 +48,7 @@ class MockBus:
             await self._handlers[event_type](source, event)
 
 
-def _make() -> tuple[CrewAIMonitorCallback, MagicMock, MockBus]:
+def _make(**kwargs) -> tuple[CrewAIMonitorCallback, MagicMock, MockBus]:
     db = MagicMock()
     bus = MockBus()
 
@@ -57,7 +57,7 @@ def _make() -> tuple[CrewAIMonitorCallback, MagicMock, MockBus]:
     original_bus = _mod.crewai_event_bus
     _mod.crewai_event_bus = bus
     try:
-        cb = CrewAIMonitorCallback(crew_id=CREW_ID, thread_id=THREAD_ID, db=db)
+        cb = CrewAIMonitorCallback(crew_id=CREW_ID, thread_id=THREAD_ID, db=db, **kwargs)
     finally:
         _mod.crewai_event_bus = original_bus
 
@@ -186,6 +186,47 @@ class TestCrewLifecycle:
         run_id = db.create_run.call_args.args[0]
         bus.emit(CrewKickoffFailedEvent, None, _crew_failed_event(error="Something went wrong"))
         db.fail_run.assert_called_once_with(run_id, "Something went wrong")
+
+
+class TestStaleRunReaping:
+    def test_stale_kickoff_is_reaped_on_next_kickoff_start(self):
+        cb, db, bus = _make(stale_run_ttl_seconds=10.0)
+        bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+        stale_run_id = next(iter(cb._active_runs))
+        cb._active_runs[stale_run_id].run_start_time = time.monotonic() - 100.0
+        db.reset_mock()
+
+        bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+
+        db.fail_run.assert_called_once()
+        args, _ = db.fail_run.call_args
+        assert args[0] == stale_run_id
+        assert "StaleRunTimeout" in args[1]
+        assert stale_run_id not in cb._active_runs
+        assert len(cb._active_runs) == 1
+
+    def test_run_within_ttl_is_not_reaped(self):
+        cb, db, bus = _make(stale_run_ttl_seconds=3600.0)
+        bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+        run_id = next(iter(cb._active_runs))
+        db.reset_mock()
+
+        bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+
+        db.fail_run.assert_not_called()
+        assert run_id in cb._active_runs
+
+    def test_ttl_none_disables_reaping(self):
+        cb, db, bus = _make(stale_run_ttl_seconds=None)
+        bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+        stale_run_id = next(iter(cb._active_runs))
+        cb._active_runs[stale_run_id].run_start_time = time.monotonic() - 10_000.0
+        db.reset_mock()
+
+        bus.emit(CrewKickoffStartedEvent, None, _crew_started_event())
+
+        db.fail_run.assert_not_called()
+        assert stale_run_id in cb._active_runs
 
 
 # ---------------------------------------------------------------------------
